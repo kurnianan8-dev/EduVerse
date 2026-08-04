@@ -19,7 +19,9 @@ import {
   Sparkles,
   Paperclip,
   File,
-  AlertCircle
+  AlertCircle,
+  MessageSquare,
+  Star
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -42,7 +44,7 @@ interface ClassItem {
 interface MaterialItem {
   id: string;
   title: string;
-  fileType: 'pdf' | 'word' | 'ppt' | 'image' | 'video';
+  fileType: string;
   fileUrl: string;
   fileName?: string;
   description: string;
@@ -57,6 +59,18 @@ interface AssignmentItem {
   className: string;
   fileUrl?: string;
   fileName?: string;
+}
+
+interface SubmissionItem {
+  id: string;
+  assignmentId: string;
+  studentId: string;
+  studentName: string;
+  fileUrl: string;
+  notes: string;
+  grade?: number;
+  feedback?: string;
+  submittedAt: string;
 }
 
 interface AttendanceRecord {
@@ -83,6 +97,7 @@ export const TeacherDashboard: React.FC = () => {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [assignments, setAssignments] = useState<AssignmentItem[]>([]);
+  const [submissions, setSubmissions] = useState<SubmissionItem[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
 
   // Modal Visibility Controls
@@ -91,13 +106,16 @@ export const TeacherDashboard: React.FC = () => {
   const [showMaterialModal, setShowMaterialModal] = useState(false);
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  const [selectedSubmission, setSelectedSubmission] = useState<SubmissionItem | null>(null);
 
   // Form Inputs
   const [newCourse, setNewCourse] = useState({ code: '', name: '' });
   const [newClass, setNewClass] = useState({ name: '', courseName: '' });
+  const [gradeInput, setGradeInput] = useState<number | ''>('');
+  const [feedbackInput, setFeedbackInput] = useState('');
   const [newMaterial, setNewMaterial] = useState<{
     title: string;
-    fileType: 'pdf' | 'word' | 'ppt' | 'image' | 'video';
+    fileType: string;
     fileUrl: string;
     fileName: string;
     description: string;
@@ -156,7 +174,25 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
-      // 3. Courses
+      // 3. Submissions
+      const { data: subData } = await supabase.from('submissions').select('*').order('submitted_at', { ascending: false });
+      if (subData) {
+        setSubmissions(
+          subData.map((s: any) => ({
+            id: s.id,
+            assignmentId: s.assignment_id,
+            studentId: s.student_id,
+            studentName: s.student_id ? `Siswa (ID: ${s.student_id.slice(0, 8)})` : 'Siswa',
+            fileUrl: s.file_url,
+            notes: s.notes || '',
+            grade: s.grade,
+            feedback: s.feedback || '',
+            submittedAt: new Date(s.submitted_at).toLocaleDateString('id-ID'),
+          }))
+        );
+      }
+
+      // 4. Courses
       const { data: courseData } = await supabase.from('courses').select('*');
       if (courseData && courseData.length > 0) {
         setCourses(
@@ -170,7 +206,7 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
-      // 4. Attendance Records
+      // 5. Attendance Records
       const { data: attData } = await supabase.from('attendance_records').select('*').order('scanned_at', { ascending: false });
       if (attData) {
         setAttendanceRecords(
@@ -189,15 +225,19 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Camera Helper Functions (Prioritize Back Camera / FacingMode Environment)
+  // Camera Helper Functions (Prioritize Back Camera / FacingMode Environment / Laptop Webcam)
   const startCamera = async () => {
     setCameraError(null);
     try {
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'environment' } } });
-      } catch (e) {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      } catch (e1) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        } catch (e2) {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        }
       }
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -205,7 +245,7 @@ export const TeacherDashboard: React.FC = () => {
       }
     } catch (err: any) {
       console.warn('Camera permission denied or unavailable:', err.message);
-      setCameraError('Kamera belakang tidak dapat diakses atau izin ditolak. Silakan gunakan opsi masukkan QR Code manual di bawah.');
+      setCameraError('Kamera tidak dapat diakses atau izin ditolak. Silakan gunakan opsi masukkan QR Code manual di bawah.');
     }
   };
 
@@ -283,13 +323,11 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // 3. Material Upload & File Handler (PDF, DOC, DOCX) to Supabase Storage & Database
+  // 3. Material Upload & Multi-Format File Handler to Supabase Storage & DB
   const handleMaterialFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      let detectedType: 'pdf' | 'word' | 'ppt' | 'image' | 'video' = 'pdf';
-      if (ext === 'doc' || ext === 'docx') detectedType = 'word';
+      const ext = file.name.split('.').pop()?.toLowerCase() || '';
 
       let publicFileUrl = URL.createObjectURL(file);
       try {
@@ -310,7 +348,7 @@ export const TeacherDashboard: React.FC = () => {
         ...prev,
         title: prev.title || file.name,
         fileName: file.name,
-        fileType: detectedType,
+        fileType: ext || 'pdf',
         fileUrl: publicFileUrl,
       }));
     }
@@ -347,7 +385,7 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // 4. Assignment Creation & File Attachment in Supabase
+  // 4. Assignment Creation in Supabase
   const handleAssignmentFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -390,7 +428,37 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // 5. Scan QR Code Check-in & Supabase Sync
+  // 5. Grade & Comment on Student Submission
+  const handleSaveGradeAndFeedback = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (!selectedSubmission) return;
+      await (supabase as any)
+        .from('submissions')
+        .update({
+          grade: gradeInput === '' ? null : Number(gradeInput),
+          feedback: feedbackInput,
+        })
+        .eq('id', selectedSubmission.id);
+
+      setSubmissions((prev) =>
+        prev.map((s) =>
+          s.id === selectedSubmission.id
+            ? { ...s, grade: gradeInput === '' ? undefined : Number(gradeInput), feedback: feedbackInput }
+            : s
+        )
+      );
+
+      alert(`✅ Nilai (${gradeInput}) & Komentar berhasil disimpan ke Supabase!`);
+      setSelectedSubmission(null);
+      setGradeInput('');
+      setFeedbackInput('');
+    } catch (err: any) {
+      alert(`Gagal menyimpan nilai: ${err.message}`);
+    }
+  };
+
+  // 6. Scan QR Code Check-in & Supabase Sync
   const handleScanQrCode = async (scannedCode: string) => {
     if (!scannedCode) return;
 
@@ -418,7 +486,7 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // 6. Export Attendance to Excel (CSV)
+  // 7. Export Attendance to Excel (CSV)
   const handleExportExcel = () => {
     const csvContent =
       'data:text/csv;charset=utf-8,' +
@@ -435,7 +503,7 @@ export const TeacherDashboard: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  // 7. Export Attendance to PDF
+  // 8. Export Attendance to PDF
   const handleExportPDF = () => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
@@ -534,7 +602,7 @@ export const TeacherDashboard: React.FC = () => {
         >
           <div>
             <span className="text-xs font-semibold text-muted-foreground block">Unggah Materi</span>
-            <span className="text-sm font-bold text-foreground">PDF, DOC, DOCX</span>
+            <span className="text-sm font-bold text-foreground">PDF, DOC, PPT, Media</span>
           </div>
           <Upload className="w-5 h-5 text-emerald-600" />
         </button>
@@ -648,7 +716,7 @@ export const TeacherDashboard: React.FC = () => {
             </div>
             <div className="space-y-3">
               {materials.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic py-2">Belum ada materi diunggah. Klik "+ Unggah Materi" untuk memilih file PDF/DOC/DOCX.</p>
+                <p className="text-xs text-muted-foreground italic py-2">Belum ada materi diunggah. Klik "+ Unggah Materi" untuk memilih berkas.</p>
               ) : (
                 materials.map((m) => (
                   <div key={m.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
@@ -675,7 +743,7 @@ export const TeacherDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Absensi Siswa, Kamera QR, & Tugas */}
+        {/* Right Column: Absensi Siswa, Kamera QR, Tugas, & Penilaian Submissions */}
         <div className="space-y-6">
           {/* Sesi Absensi & Kamera QR */}
           <div className="p-6 rounded-2xl bg-card border border-border shadow-sm space-y-4">
@@ -684,7 +752,7 @@ export const TeacherDashboard: React.FC = () => {
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Camera className="w-5 h-5 text-amber-600" /> Rekap Absensi & QR Code Siswa
                 </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian Kamera Belakang Perangkat & Penyimpanan ke Supabase.</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian Kamera Belakang HP / Webcam Laptop & Penyimpanan ke Supabase.</p>
               </div>
               <button
                 onClick={() => setShowScanModal(true)}
@@ -740,34 +808,53 @@ export const TeacherDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Tasks & Assignments */}
+          {/* Pengumpulan Jawaban Siswa & Penilaian Guru */}
           <div className="p-6 rounded-2xl bg-card border border-border shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between border-b border-border pb-3">
               <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                <FileText className="w-5 h-5 text-teal-600" /> Daftar Tugas Dibuat ({assignments.length})
+                <Star className="w-5 h-5 text-amber-500" /> Penilaian & Jawaban Tugas Siswa ({submissions.length})
               </h3>
-              <button onClick={() => setShowAssignmentModal(true)} className="text-xs font-bold text-teal-600 hover:underline cursor-pointer">
-                + Buat Tugas
-              </button>
             </div>
             <div className="space-y-3">
-              {assignments.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic py-2">Belum ada tugas dibuat. Klik "+ Buat Tugas" untuk menerbitkan tugas ke Supabase.</p>
+              {submissions.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-2">Belum ada pengumpulan jawaban tugas dari siswa.</p>
               ) : (
-                assignments.map((a) => (
-                  <div key={a.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
+                submissions.map((sub) => (
+                  <div key={sub.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
                     <div>
-                      <h4 className="font-bold text-sm text-foreground">{a.title}</h4>
-                      <p className="text-xs text-muted-foreground">{a.description} • Tenggat: {a.dueDate}</p>
-                      {a.fileName && (
-                        <span className="inline-flex items-center gap-1 text-[10px] text-teal-400 mt-1">
-                          <Paperclip className="w-3 h-3" /> {a.fileName}
+                      <h4 className="font-bold text-sm text-foreground">{sub.studentName}</h4>
+                      <p className="text-xs text-muted-foreground">Dikirim: {sub.submittedAt} • Catatan: {sub.notes || '-'}</p>
+                      {sub.grade !== undefined && sub.grade !== null ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-500 mt-1">
+                          Nilai: {sub.grade} / 100 {sub.feedback ? `• Komentar: "${sub.feedback}"` : ''}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-amber-500 font-bold mt-1">
+                          Belum Dinilai
                         </span>
                       )}
                     </div>
-                    <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-500/10 text-teal-600">
-                      Aktif
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={sub.fileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-2 rounded-lg bg-accent hover:bg-muted text-foreground transition-colors cursor-pointer"
+                        title="Unduh Jawaban Siswa"
+                      >
+                        <Download className="w-4 h-4" />
+                      </a>
+                      <button
+                        onClick={() => {
+                          setSelectedSubmission(sub);
+                          setGradeInput(sub.grade !== undefined ? sub.grade : '');
+                          setFeedbackInput(sub.feedback || '');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow flex items-center gap-1 cursor-pointer"
+                      >
+                        <Star className="w-3.5 h-3.5" /> Beri Nilai
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -775,6 +862,73 @@ export const TeacherDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Modal: Penilaian & Komentar Guru */}
+      {selectedSubmission && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                <Star className="w-5 h-5 text-amber-500" /> Penilaian Jawaban Siswa
+              </h3>
+              <button onClick={() => setSelectedSubmission(null)} className="text-muted-foreground hover:text-foreground cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-1 bg-muted/40 p-3 rounded-xl text-xs">
+              <p className="font-bold text-foreground">Siswa: {selectedSubmission.studentName}</p>
+              <p className="text-muted-foreground">Catatan Siswa: {selectedSubmission.notes || '-'}</p>
+              <a href={selectedSubmission.fileUrl} target="_blank" rel="noreferrer" className="text-emerald-500 hover:underline inline-flex items-center gap-1 font-bold mt-1">
+                <Download className="w-3.5 h-3.5" /> Unduh Berkas Jawaban
+              </a>
+            </div>
+
+            <form onSubmit={handleSaveGradeAndFeedback} className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-muted-foreground uppercase">Nilai (0 - 100)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  required
+                  placeholder="Contoh: 90"
+                  value={gradeInput}
+                  onChange={(e) => setGradeInput(e.target.value === '' ? '' : Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-muted-foreground uppercase">Komentar / Feedback Guru</label>
+                <textarea
+                  rows={3}
+                  placeholder="Masukkan umpan balik atau apresiasi pengerjaan..."
+                  value={feedbackInput}
+                  onChange={(e) => setFeedbackInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedSubmission(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Star className="w-3.5 h-3.5" /> Simpan Nilai Ke Supabase
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Camera QR Scan & Device Video Stream */}
       {showScanModal && (
@@ -795,7 +949,7 @@ export const TeacherDashboard: React.FC = () => {
               {!cameraActive && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center p-4 space-y-2 text-center bg-black/80">
                   <Camera className="w-10 h-10 text-amber-500 animate-pulse" />
-                  <p className="text-xs text-slate-300">Menghubungkan ke Kamera Belakang Perangkat...</p>
+                  <p className="text-xs text-slate-300">Menghubungkan ke Kamera Perangkat / Webcam...</p>
                 </div>
               )}
             </div>
@@ -901,7 +1055,7 @@ export const TeacherDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Upload Material with PDF/DOC/DOCX file input */}
+      {/* Modal: Upload Material with Full Multi-Format File Input */}
       {showMaterialModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
@@ -915,10 +1069,10 @@ export const TeacherDashboard: React.FC = () => {
             </div>
             <form onSubmit={handleUploadMaterial} className="space-y-3">
               <div className="space-y-1">
-                <label className="text-xs font-bold text-muted-foreground uppercase">Pilih Berkas (PDF, DOC, DOCX)</label>
+                <label className="text-xs font-bold text-muted-foreground uppercase">Pilih Berkas (PDF, DOC, DOCX, PPT, XLS, TXT, ZIP, Gambar, Video, Audio)</label>
                 <input
                   type="file"
-                  accept=".pdf,.doc,.docx"
+                  accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.rar,image/*,audio/*,video/*"
                   onChange={handleMaterialFileChange}
                   className="w-full text-xs text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer"
                 />
@@ -934,14 +1088,13 @@ export const TeacherDashboard: React.FC = () => {
               />
 
               <div className="grid grid-cols-2 gap-2">
-                <select
+                <input
+                  type="text"
+                  placeholder="Format File"
                   value={newMaterial.fileType}
-                  onChange={(e) => setNewMaterial({ ...newMaterial, fileType: e.target.value as any })}
-                  className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                >
-                  <option value="pdf">Format PDF</option>
-                  <option value="word">Format Word (DOC/DOCX)</option>
-                </select>
+                  onChange={(e) => setNewMaterial({ ...newMaterial, fileType: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
                 <input
                   type="text"
                   placeholder="URL File / Link Supabase Storage"
@@ -1001,7 +1154,7 @@ export const TeacherDashboard: React.FC = () => {
                 <label className="text-xs font-bold text-muted-foreground uppercase">Lampirkan Berkas Soal/Panduan (Opsional)</label>
                 <input
                   type="file"
-                  accept=".pdf,.doc,.docx"
+                  accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.zip,.rar,image/*"
                   onChange={handleAssignmentFileChange}
                   className="w-full text-xs text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-teal-600 file:text-white hover:file:bg-teal-500 cursor-pointer"
                 />

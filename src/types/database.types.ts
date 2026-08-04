@@ -15,7 +15,7 @@ export interface Database {
           email: string;
           full_name: string;
           avatar_url: string | null;
-          role: 'super_admin' | 'school_admin' | 'teacher' | 'student' | 'parent';
+          role: 'guru' | 'siswa' | 'teacher' | 'student';
           phone_number: string | null;
           created_at: string;
           updated_at: string;
@@ -25,7 +25,7 @@ export interface Database {
           email: string;
           full_name: string;
           avatar_url?: string | null;
-          role?: 'super_admin' | 'school_admin' | 'teacher' | 'student' | 'parent';
+          role?: 'guru' | 'siswa' | 'teacher' | 'student';
           phone_number?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -35,7 +35,7 @@ export interface Database {
           email?: string;
           full_name?: string;
           avatar_url?: string | null;
-          role?: 'super_admin' | 'school_admin' | 'teacher' | 'student' | 'parent';
+          role?: 'guru' | 'siswa' | 'teacher' | 'student';
           phone_number?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -230,6 +230,122 @@ export interface Database {
           entity_id?: string | null;
           metadata?: Json | null;
           created_at?: string;
+        };
+      };
+      materials: {
+        Row: {
+          id: string;
+          class_id: string | null;
+          teacher_id: string | null;
+          title: string;
+          file_type: string;
+          file_url: string;
+          description: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          class_id?: string | null;
+          teacher_id?: string | null;
+          title: string;
+          file_type: string;
+          file_url: string;
+          description?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          class_id?: string | null;
+          teacher_id?: string | null;
+          title?: string;
+          file_type?: string;
+          file_url?: string;
+          description?: string | null;
+          created_at?: string;
+        };
+      };
+      assignments: {
+        Row: {
+          id: string;
+          class_id: string | null;
+          teacher_id: string | null;
+          title: string;
+          description: string | null;
+          due_date: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          class_id?: string | null;
+          teacher_id?: string | null;
+          title: string;
+          description?: string | null;
+          due_date?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          class_id?: string | null;
+          teacher_id?: string | null;
+          title?: string;
+          description?: string | null;
+          due_date?: string | null;
+          created_at?: string;
+        };
+      };
+      submissions: {
+        Row: {
+          id: string;
+          assignment_id: string;
+          student_id: string;
+          file_url: string | null;
+          notes: string | null;
+          grade: number | null;
+          feedback: string | null;
+          submitted_at: string;
+        };
+        Insert: {
+          id?: string;
+          assignment_id: string;
+          student_id: string;
+          file_url?: string | null;
+          notes?: string | null;
+          grade?: number | null;
+          feedback?: string | null;
+          submitted_at?: string;
+        };
+        Update: {
+          id?: string;
+          assignment_id?: string;
+          student_id?: string;
+          file_url?: string | null;
+          notes?: string | null;
+          grade?: number | null;
+          feedback?: string | null;
+          submitted_at?: string;
+        };
+      };
+      attendance_records: {
+        Row: {
+          id: string;
+          session_id: string | null;
+          student_id: string | null;
+          status: string;
+          scanned_at: string;
+        };
+        Insert: {
+          id?: string;
+          session_id?: string | null;
+          student_id?: string | null;
+          status?: string;
+          scanned_at?: string;
+        };
+        Update: {
+          id?: string;
+          session_id?: string | null;
+          student_id?: string | null;
+          status?: string;
+          scanned_at?: string;
         };
       };
     };

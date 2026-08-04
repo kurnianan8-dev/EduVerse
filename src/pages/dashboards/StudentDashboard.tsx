@@ -17,7 +17,8 @@ import {
   Video,
   File,
   Send,
-  Paperclip
+  Paperclip,
+  Star
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -27,7 +28,7 @@ interface StudentMaterial {
   id: string;
   title: string;
   subject: string;
-  fileType: 'pdf' | 'word' | 'ppt' | 'image' | 'video';
+  fileType: string;
   fileUrl: string;
   description: string;
 }
@@ -39,6 +40,8 @@ interface StudentAssignment {
   dueDate: string;
   status: 'Belum Dikumpulkan' | 'Sudah Dikumpulkan';
   description: string;
+  grade?: number;
+  feedback?: string;
 }
 
 export const StudentDashboard: React.FC = () => {
@@ -50,7 +53,7 @@ export const StudentDashboard: React.FC = () => {
   const [submissionNotes, setSubmissionNotes] = useState('');
   const [submissionFileUrl, setSubmissionFileUrl] = useState('');
   const [submissionFileName, setSubmissionFileName] = useState('');
-  const [submittedList, setSubmittedList] = useState<string[]>([]);
+  const [submittedList, setSubmittedList] = useState<Record<string, { grade?: number; feedback?: string }>>({});
 
   const [materials, setMaterials] = useState<StudentMaterial[]>([]);
   const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
@@ -80,7 +83,19 @@ export const StudentDashboard: React.FC = () => {
         );
       }
 
-      // 2. Fetch Assignments from Supabase
+      // 2. Fetch Submissions submitted by this student to check status, grades, and comments
+      const submittedMap: Record<string, { grade?: number; feedback?: string }> = {};
+      if (user?.id) {
+        const { data: subData } = await supabase.from('submissions').select('assignment_id, grade, feedback').eq('student_id', user.id);
+        if (subData) {
+          subData.forEach((s: any) => {
+            submittedMap[s.assignment_id] = { grade: s.grade, feedback: s.feedback };
+          });
+          setSubmittedList(submittedMap);
+        }
+      }
+
+      // 3. Fetch Assignments from Supabase
       const { data: assData } = await supabase.from('assignments').select('*').order('created_at', { ascending: false });
       if (assData) {
         setAssignments(
@@ -89,18 +104,12 @@ export const StudentDashboard: React.FC = () => {
             title: a.title,
             subject: 'Pelajaran',
             dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
-            status: 'Belum Dikumpulkan',
+            status: submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan',
             description: a.description || '',
+            grade: submittedMap[a.id]?.grade,
+            feedback: submittedMap[a.id]?.feedback,
           }))
         );
-      }
-
-      // 3. Fetch Submissions submitted by this student
-      if (user?.id) {
-        const { data: subData } = await supabase.from('submissions').select('assignment_id').eq('student_id', user.id);
-        if (subData) {
-          setSubmittedList(subData.map((s: any) => s.assignment_id));
-        }
       }
     } catch (err) {
       console.warn('Error fetching student Supabase data:', err);
@@ -142,7 +151,11 @@ export const StudentDashboard: React.FC = () => {
         notes: submissionNotes,
       } as any).select();
 
-      setSubmittedList((prev) => [...prev, selectedAssignment.id]);
+      setSubmittedList((prev) => ({ ...prev, [selectedAssignment.id]: {} }));
+      setAssignments((prev) =>
+        prev.map((a) => (a.id === selectedAssignment.id ? { ...a, status: 'Sudah Dikumpulkan' } : a))
+      );
+
       alert(`✅ Tugas "${selectedAssignment.title}" berhasil dikumpulkan dan tersimpan di Supabase!`);
       setSelectedAssignment(null);
       setSubmissionNotes('');
@@ -211,7 +224,7 @@ export const StudentDashboard: React.FC = () => {
               : 'bg-card text-muted-foreground hover:text-foreground border border-border'
           }`}
         >
-          <FileCheck className="w-4 h-4" /> Tugas & Pengunjukan
+          <FileCheck className="w-4 h-4" /> Tugas & Penilaian
         </button>
       </div>
 
@@ -277,18 +290,19 @@ export const StudentDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 3: Mengumpulkan Tugas */}
+      {/* Tab 3: Mengumpulkan Tugas & Melihat Nilai Guru */}
       {activeTab === 'tugas' && (
         <div className="p-6 rounded-2xl bg-card border border-border shadow-sm space-y-4">
           <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-            <FileCheck className="w-5 h-5 text-orange-600" /> Daftar Tugas & Status Pengumpulan
+            <FileCheck className="w-5 h-5 text-orange-600" /> Daftar Tugas & Status Penilaian
           </h3>
           {assignments.length === 0 ? (
             <p className="text-xs text-muted-foreground italic py-4 text-center">Belum ada tugas yang diterbitkan Guru di Supabase.</p>
           ) : (
             <div className="space-y-3">
               {assignments.map((a) => {
-                const isSubmitted = submittedList.includes(a.id);
+                const subInfo = submittedList[a.id];
+                const isSubmitted = !!subInfo;
                 return (
                   <div key={a.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
@@ -298,6 +312,14 @@ export const StudentDashboard: React.FC = () => {
                       </div>
                       <h4 className="font-bold text-sm text-foreground mt-0.5">{a.title}</h4>
                       <p className="text-xs text-muted-foreground mt-1">{a.description}</p>
+
+                      {/* Display Grade and Teacher Feedback */}
+                      {subInfo?.grade !== undefined && subInfo?.grade !== null && (
+                        <div className="mt-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 font-bold flex items-center gap-2">
+                          <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
+                          <span>Nilai Guru: {subInfo.grade} / 100 {subInfo.feedback ? `• Komentar: "${subInfo.feedback}"` : ''}</span>
+                        </div>
+                      )}
                     </div>
                     <div>
                       {isSubmitted ? (
@@ -321,7 +343,7 @@ export const StudentDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Form Pengumpulan Tugas dengan Upload Berkas Jawaban */}
+      {/* Modal: Form Pengumpulan Tugas dengan Upload Berkas Jawaban (Multi-Format) */}
       {selectedAssignment && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
@@ -339,10 +361,10 @@ export const StudentDashboard: React.FC = () => {
 
             <form onSubmit={handleSubmitAssignment} className="space-y-3">
               <div className="space-y-1">
-                <label className="text-xs font-bold text-muted-foreground uppercase">Unggah Berkas Jawaban (PDF, DOCX, PPTX, Gambar)</label>
+                <label className="text-xs font-bold text-muted-foreground uppercase">Unggah Berkas Jawaban (PDF, Word, PPT, Excel, ZIP, RAR, Gambar, Video)</label>
                 <input
                   type="file"
-                  accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"
+                  accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.zip,.rar,image/*,video/*"
                   onChange={handleSubmissionFileChange}
                   className="w-full text-xs text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-orange-600 file:text-white hover:file:bg-orange-500 cursor-pointer"
                 />

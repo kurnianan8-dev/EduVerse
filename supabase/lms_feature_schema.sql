@@ -34,8 +34,12 @@ CREATE TABLE IF NOT EXISTS public.submissions (
   student_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
   file_url TEXT,
   notes TEXT,
+  grade NUMERIC,
+  feedback TEXT,
   submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS grade NUMERIC;
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS feedback TEXT;
 
 -- 5. Tabel Sesi Absensi (Attendance Sessions)
 CREATE TABLE IF NOT EXISTS public.attendance_sessions (

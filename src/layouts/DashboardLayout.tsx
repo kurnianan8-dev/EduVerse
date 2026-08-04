@@ -159,22 +159,6 @@ export const DashboardLayout: React.FC = () => {
 
           {/* Right Header Action Items */}
           <div className="flex items-center gap-3">
-            {/* Live Architecture Role Switcher (Dev Mode Toolbar) */}
-            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-accent/80 border border-border text-xs">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
-              <span className="font-medium text-muted-foreground">Ganti Peran:</span>
-              <select
-                value={role}
-                onChange={(e) => handleRoleSwitch(e.target.value as AppRole)}
-                className="bg-transparent font-semibold text-foreground focus:outline-none cursor-pointer"
-              >
-                <option value="super_admin">Super Admin</option>
-                <option value="school_admin">Admin Sekolah</option>
-                <option value="teacher">Guru</option>
-                <option value="student">Siswa</option>
-                <option value="parent">Orang Tua</option>
-              </select>
-            </div>
 
             {/* Notifications */}
             <button className="relative p-2 rounded-lg text-muted-foreground hover:bg-accent transition-colors" title="Notifikasi">
@@ -228,23 +212,6 @@ export const DashboardLayout: React.FC = () => {
         {/* Mobile Slide-out Menu */}
         {mobileMenuOpen && (
           <div className="lg:hidden fixed inset-0 z-40 bg-background/80 backdrop-blur-md flex flex-col pt-16 px-6 pb-6">
-            <div className="mb-4">
-              <label className="text-xs font-semibold text-muted-foreground mb-1 block">Ganti Peran Demonstrasi:</label>
-              <select
-                value={role}
-                onChange={(e) => {
-                  handleRoleSwitch(e.target.value as AppRole);
-                  setMobileMenuOpen(false);
-                }}
-                className="w-full p-2 rounded-lg bg-card border border-border text-sm font-semibold"
-              >
-                <option value="super_admin">Super Admin</option>
-                <option value="school_admin">Admin Sekolah</option>
-                <option value="teacher">Guru</option>
-                <option value="student">Siswa</option>
-                <option value="parent">Orang Tua</option>
-              </select>
-            </div>
             <nav className="space-y-2 flex-1">
               {filteredNavItems.map((item) => {
                 const Icon = item.icon;

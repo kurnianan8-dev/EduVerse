@@ -178,7 +178,7 @@ export const StudentRegister: React.FC = () => {
               <input
                 {...register('fullName')}
                 type="text"
-                placeholder={selectedRole === 'guru' ? 'Contoh: Prof. Marcus Chen' : 'Contoh: Budi Pratama'}
+                placeholder={selectedRole === 'guru' ? 'Masukkan Nama Guru' : 'Masukkan Nama Siswa'}
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
               />
               {errors.fullName && <p className="text-xs text-rose-400 mt-1">{errors.fullName.message}</p>}
