@@ -498,7 +498,7 @@ export const TeacherDashboard: React.FC = () => {
         return;
       }
 
-      const student = studentProfiles[0];
+      const student: any = (studentProfiles as any[])[0];
       const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
       // 2. Insert attendance record into Supabase
