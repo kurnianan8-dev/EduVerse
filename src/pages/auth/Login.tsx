@@ -19,7 +19,7 @@ export const Login: React.FC = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [selectedRole, setSelectedRole] = useState<AppRole>('school_admin');
+  const [selectedRole, setSelectedRole] = useState<AppRole>('teacher');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
@@ -30,7 +30,7 @@ export const Login: React.FC = () => {
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: `${selectedRole}@eduverse.io`,
+      email: `teacher@eduverse.io`,
       password: 'password123',
     },
   });
@@ -39,7 +39,8 @@ export const Login: React.FC = () => {
     setIsSubmitting(true);
     try {
       await login(_data.email, _data.password, selectedRole);
-      navigate(`/dashboard/${selectedRole.replace('_', '-')}`, { replace: true });
+      const targetPath = selectedRole === 'teacher' || selectedRole === 'guru' ? '/dashboard/guru' : '/dashboard/siswa';
+      navigate(targetPath, { replace: true });
     } finally {
       setIsSubmitting(false);
     }
@@ -47,7 +48,7 @@ export const Login: React.FC = () => {
 
   const handleRoleSelect = (role: AppRole) => {
     setSelectedRole(role);
-    setValue('email', `${role}@eduverse.io`);
+    setValue('email', `${role === 'teacher' ? 'teacher' : 'student'}@eduverse.io`);
     setValue('password', 'password123');
   };
 
@@ -55,36 +56,35 @@ export const Login: React.FC = () => {
     <div className="space-y-6">
       <div className="space-y-2 text-center md:text-left">
         <h2 className="text-2xl font-display font-extrabold text-white">Masuk ke EduVerse</h2>
-        <p className="text-sm text-slate-400">Pilih peran akun Anda untuk mencoba arsitektur dasbor berbasis peran.</p>
+        <p className="text-sm text-slate-400">Pilih masuk sebagai Guru atau Siswa untuk membuka dasbor pembelajaran.</p>
       </div>
 
-      {/* Role Selection Chips for Quick Architecture Testing */}
+      {/* Role Selection Tabs: Guru & Siswa Only */}
       <div className="space-y-2">
         <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-          <span>Pilih Peran Kerja</span>
+          <span>Pilih Peran Akun</span>
           <span className="text-[10px] text-blue-400 flex items-center gap-1 font-normal">
-            <Sparkles className="w-3 h-3" /> Beralih Cepat
+            <Sparkles className="w-3 h-3" /> Akses Cepat
           </span>
         </label>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {(['super_admin', 'school_admin', 'teacher', 'student', 'parent'] as AppRole[]).map((r) => {
+        <div className="grid grid-cols-2 gap-3">
+          {(['teacher', 'student'] as AppRole[]).map((r) => {
             const isSelected = selectedRole === r;
             const style = getRoleBadgeStyle(r);
+            const labelText = r === 'teacher' ? 'Guru' : 'Siswa';
             return (
               <button
                 key={r}
                 type="button"
                 onClick={() => handleRoleSelect(r)}
-                className={`p-2.5 rounded-xl text-xs font-semibold border transition-all text-left flex items-center justify-between cursor-pointer ${
+                className={`p-3 rounded-xl text-sm font-bold border transition-all text-center flex items-center justify-center gap-2 cursor-pointer ${
                   isSelected
                     ? `${style.bg} ${style.text} ${style.border} ring-2 ring-blue-500/50 scale-[1.02]`
                     : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
                 }`}
               >
-                <div className="flex items-center gap-1.5">
-                  <Shield className="w-3.5 h-3.5" />
-                  <span>{ROLE_LABELS[r]}</span>
-                </div>
+                <Shield className="w-4 h-4" />
+                <span>Login {labelText}</span>
               </button>
             );
           })}

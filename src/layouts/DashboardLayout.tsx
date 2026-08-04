@@ -43,15 +43,15 @@ const NAVIGATION_ITEMS: NavItem[] = [
   { label: 'Pengguna & Peran', href: '/dashboard/school-admin/users', icon: Users, roles: ['school_admin'] },
   { label: 'Kelas & Departemen', href: '/dashboard/school-admin/departments', icon: Building2, roles: ['school_admin'] },
 
-  // Teacher Navigation
-  { label: 'Dasbor Guru', href: '/dashboard/teacher', icon: LayoutDashboard, roles: ['teacher'] },
-  { label: 'Mata Pelajaran Saya', href: '/dashboard/teacher/courses', icon: BookOpen, roles: ['teacher'], badge: '4 Aktif' },
-  { label: 'Penilaian & Tugas', href: '/dashboard/teacher/grades', icon: Award, roles: ['teacher'] },
+  // Teacher / Guru Navigation
+  { label: 'Dasbor Guru', href: '/dashboard/guru', icon: LayoutDashboard, roles: ['teacher', 'guru'] },
+  { label: 'Mata Pelajaran Saya', href: '/dashboard/teacher/courses', icon: BookOpen, roles: ['teacher', 'guru'], badge: '4 Aktif' },
+  { label: 'Penilaian & Tugas', href: '/dashboard/teacher/grades', icon: Award, roles: ['teacher', 'guru'] },
 
-  // Student Navigation
-  { label: 'Ruang Belajar Siswa', href: '/dashboard/student', icon: StudentIcon, roles: ['student'] },
-  { label: 'Mata Pelajaran Diikuti', href: '/dashboard/student/courses', icon: BookOpen, roles: ['student'] },
-  { label: 'Nilai & Jadwal Saya', href: '/dashboard/student/grades', icon: Award, roles: ['student'] },
+  // Student / Siswa Navigation
+  { label: 'Ruang Belajar Siswa', href: '/dashboard/siswa', icon: StudentIcon, roles: ['student', 'siswa'] },
+  { label: 'Mata Pelajaran Diikuti', href: '/dashboard/student/courses', icon: BookOpen, roles: ['student', 'siswa'] },
+  { label: 'Nilai & Jadwal Saya', href: '/dashboard/student/grades', icon: Award, roles: ['student', 'siswa'] },
 
   // Parent Navigation
   { label: 'Portal Orang Tua', href: '/dashboard/parent', icon: UserCheck, roles: ['parent'] },

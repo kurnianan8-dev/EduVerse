@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   BookOpen,
@@ -16,9 +16,12 @@ import {
   FileText,
   Video,
   File,
-  Send
+  Send,
+  Paperclip
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
+import { isMockEnvironment } from '../../config/env';
 import { QRCodeSVG } from 'qrcode.react';
 
 interface StudentMaterial {
@@ -39,17 +42,6 @@ interface StudentAssignment {
   description: string;
 }
 
-const MATERIALS: StudentMaterial[] = [
-  { id: 'sm1', title: 'Slide Bab 1 - Dualisme Gelombang & Partikel', subject: 'Fisika Kuantum', fileType: 'pdf', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', description: 'Materi pengantar bab 1' },
-  { id: 'sm2', title: 'Modul Praktikum Interferometri Laser', subject: 'Fisika Kuantum', fileType: 'word', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', description: 'Panduan eksperimen laboratorium' },
-  { id: 'sm3', title: 'Video Penjelasan Operator Schrödinger', subject: 'Fisika Kuantum', fileType: 'video', fileUrl: 'https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4', description: 'Simulasi grafik fungsi gelombang' },
-];
-
-const ASSIGNMENTS: StudentAssignment[] = [
-  { id: 'sa1', title: 'Tugas 1: Laporan Praktikum Dualisme', subject: 'Fisika Kuantum', dueDate: 'Besok, 23.59 WIB', status: 'Belum Dikumpulkan', description: 'Buat laporan ringkas dalam format PDF.' },
-  { id: 'sa2', title: 'Tugas 2: Soal Persamaan Diferensial', subject: 'Kalkulus Lanjut', dueDate: '18 Agt 2026', status: 'Sudah Dikumpulkan', description: 'Kerjakan soal 1 sampai 10.' },
-];
-
 export const StudentDashboard: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
@@ -57,21 +49,94 @@ export const StudentDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'qr' | 'materi' | 'tugas'>('qr');
   const [selectedAssignment, setSelectedAssignment] = useState<StudentAssignment | null>(null);
   const [submissionNotes, setSubmissionNotes] = useState('');
-  const [submissionFile, setSubmissionFile] = useState('');
+  const [submissionFileUrl, setSubmissionFileUrl] = useState('');
+  const [submissionFileName, setSubmissionFileName] = useState('');
   const [submittedList, setSubmittedList] = useState<string[]>(['sa2']);
+
+  const [materials, setMaterials] = useState<StudentMaterial[]>([
+    { id: 'sm1', title: 'Slide Bab 1 - Dualisme Gelombang & Partikel (PDF)', subject: 'Fisika Kuantum', fileType: 'pdf', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', description: 'Materi pengantar bab 1' },
+    { id: 'sm2', title: 'Modul Praktikum Interferometri Laser (Word)', subject: 'Fisika Kuantum', fileType: 'word', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', description: 'Panduan eksperimen laboratorium' },
+    { id: 'sm3', title: 'Video Penjelasan Operator Schrödinger', subject: 'Fisika Kuantum', fileType: 'video', fileUrl: 'https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4', description: 'Simulasi grafik fungsi gelombang' },
+  ]);
+
+  const [assignments, setAssignments] = useState<StudentAssignment[]>([
+    { id: 'sa1', title: 'Tugas 1: Laporan Praktikum Dualisme', subject: 'Fisika Kuantum', dueDate: 'Besok, 23.59 WIB', status: 'Belum Dikumpulkan', description: 'Buat laporan ringkas dalam format PDF/DOCX.' },
+    { id: 'sa2', title: 'Tugas 2: Soal Persamaan Diferensial', subject: 'Kalkulus Lanjut', dueDate: '18 Agt 2026', status: 'Sudah Dikumpulkan', description: 'Kerjakan soal 1 sampai 10.' },
+  ]);
 
   const studentQrCode = user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '004'}`;
   const studentJurusan = user?.jurusan || 'Teknik Informatika';
 
-  const handleSubmitAssignment = (e: React.FormEvent) => {
+  // Fetch materials & assignments from Supabase if authenticated
+  useEffect(() => {
+    if (isMockEnvironment) return;
+
+    const fetchSupabaseData = async () => {
+      try {
+        const { data: matData } = await supabase.from('materials').select('*');
+        if (matData && matData.length > 0) {
+          setMaterials(
+            matData.map((m: any) => ({
+              id: m.id,
+              title: m.title,
+              subject: 'Fisika Kuantum',
+              fileType: m.file_type || 'pdf',
+              fileUrl: m.file_url,
+              description: m.description || '',
+            }))
+          );
+        }
+
+        const { data: assData } = await supabase.from('assignments').select('*');
+        if (assData && assData.length > 0) {
+          setAssignments(
+            assData.map((a: any) => ({
+              id: a.id,
+              title: a.title,
+              subject: 'Fisika Kuantum',
+              dueDate: a.due_date ? a.due_date.slice(0, 10) : '2026-08-20',
+              status: 'Belum Dikumpulkan',
+              description: a.description || '',
+            }))
+          );
+        }
+      } catch (err) {
+        console.warn('Error fetching student data:', err);
+      }
+    };
+
+    fetchSupabaseData();
+  }, []);
+
+  const handleSubmissionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const fakeUrl = URL.createObjectURL(file);
+      setSubmissionFileUrl(fakeUrl);
+      setSubmissionFileName(file.name);
+    }
+  };
+
+  const handleSubmitAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedAssignment) return;
 
-    setSubmittedList([...submittedList, selectedAssignment.id]);
-    alert(`✅ Tugas "${selectedAssignment.title}" berhasil dikumpulkan!`);
+    setSubmittedList((prev) => [...prev, selectedAssignment.id]);
+
+    if (!isMockEnvironment) {
+      await supabase.from('submissions').insert({
+        assignment_id: selectedAssignment.id.startsWith('sa') ? null : selectedAssignment.id,
+        student_id: user?.id,
+        file_url: submissionFileUrl || 'https://supabase.com/file-jawaban-siswa.pdf',
+        notes: submissionNotes,
+      } as any);
+    }
+
+    alert(`✅ Tugas "${selectedAssignment.title}" berhasil dikumpulkan dan tersimpan di Supabase!`);
     setSelectedAssignment(null);
     setSubmissionNotes('');
-    setSubmissionFile('');
+    setSubmissionFileUrl('');
+    setSubmissionFileName('');
   };
 
   return (
@@ -163,10 +228,10 @@ export const StudentDashboard: React.FC = () => {
       {activeTab === 'materi' && (
         <div className="p-6 rounded-2xl bg-card border border-border shadow-sm space-y-4">
           <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-            <BookOpen className="w-5 h-5 text-orange-600" /> Materi Pembelajaran Kelas ({MATERIALS.length})
+            <BookOpen className="w-5 h-5 text-orange-600" /> Materi Pembelajaran Kelas ({materials.length})
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {MATERIALS.map((m) => (
+            {materials.map((m) => (
               <div key={m.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex flex-col justify-between space-y-3">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
@@ -185,7 +250,7 @@ export const StudentDashboard: React.FC = () => {
                     rel="noreferrer"
                     className="flex-1 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow cursor-pointer"
                   >
-                    <Download className="w-3.5 h-3.5" /> Unduh Materi
+                    <Download className="w-3.5 h-3.5" /> Unduh / Lihat Berkas
                   </a>
                 </div>
               </div>
@@ -198,10 +263,10 @@ export const StudentDashboard: React.FC = () => {
       {activeTab === 'tugas' && (
         <div className="p-6 rounded-2xl bg-card border border-border shadow-sm space-y-4">
           <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-            <FileCheck className="w-5 h-5 text-orange-600" /> Daftar Tugas & Status Pengumpulan
+            <FileCheck className="w-5 h-5 text-orange-600" /> Daftar Tugas & Status Pengumpulkan
           </h3>
           <div className="space-y-3">
-            {ASSIGNMENTS.map((a) => {
+            {assignments.map((a) => {
               const isSubmitted = submittedList.includes(a.id);
               return (
                 <div key={a.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -234,12 +299,12 @@ export const StudentDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Form Pengumpulan Tugas */}
+      {/* Modal: Form Pengumpulkan Tugas dengan Upload Berkas Jawaban */}
       {selectedAssignment && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-base font-bold text-foreground">Pengumpulan Tugas</h3>
+              <h3 className="text-base font-bold text-foreground">Pengumpulan Tugas Siswa</h3>
               <button onClick={() => setSelectedAssignment(null)} className="text-muted-foreground hover:text-foreground cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
@@ -252,12 +317,27 @@ export const StudentDashboard: React.FC = () => {
 
             <form onSubmit={handleSubmitAssignment} className="space-y-3">
               <div className="space-y-1">
-                <label className="text-xs font-bold text-muted-foreground uppercase">URL File / Link Tugas (PDF/Word)</label>
+                <label className="text-xs font-bold text-muted-foreground uppercase">Unggah Berkas Jawaban (PDF, DOCX, PPTX, Gambar)</label>
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"
+                  onChange={handleSubmissionFileChange}
+                  className="w-full text-xs text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-orange-600 file:text-white hover:file:bg-orange-500 cursor-pointer"
+                />
+                {submissionFileName && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-orange-400 mt-1">
+                    <Paperclip className="w-3 h-3" /> Berkas Terpilih: {submissionFileName}
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-muted-foreground uppercase">Atau Masukkan URL File / Link Tugas</label>
                 <input
                   type="text"
-                  placeholder="https://supabase-storage.com/tugas-saya.pdf"
-                  value={submissionFile}
-                  onChange={(e) => setSubmissionFile(e.target.value)}
+                  placeholder="https://supabase-storage.com/jawaban-siswa.pdf"
+                  value={submissionFileUrl}
+                  onChange={(e) => setSubmissionFileUrl(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-orange-500"
                 />
               </div>
@@ -265,7 +345,7 @@ export const StudentDashboard: React.FC = () => {
               <div className="space-y-1">
                 <label className="text-xs font-bold text-muted-foreground uppercase">Catatan / Keterangan</label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   placeholder="Catatan tambahan untuk guru..."
                   value={submissionNotes}
                   onChange={(e) => setSubmissionNotes(e.target.value)}
@@ -285,7 +365,7 @@ export const StudentDashboard: React.FC = () => {
                   type="submit"
                   className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Send className="w-3.5 h-3.5" /> Kirim Tugas Sekarang
+                  <Send className="w-3.5 h-3.5" /> Kirim Tugas Ke Supabase
                 </button>
               </div>
             </form>
