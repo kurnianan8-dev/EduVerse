@@ -242,7 +242,7 @@ export const TeacherDashboard: React.FC = () => {
       } as any).select();
 
       const obj: CourseModule = {
-        id: data?.[0]?.id || `c-${Date.now()}`,
+        id: (data as any)?.[0]?.id || `c-${Date.now()}`,
         code: newCourse.code,
         name: newCourse.name,
         students: 0,
@@ -269,7 +269,7 @@ export const TeacherDashboard: React.FC = () => {
       } as any).select();
 
       const obj: ClassItem = {
-        id: data?.[0]?.id || `cls-${Date.now()}`,
+        id: (data as any)?.[0]?.id || `cls-${Date.now()}`,
         name: newClass.name,
         courseName: newClass.courseName || 'Mata Pelajaran',
         academicYear: '2026/2027',
@@ -330,7 +330,7 @@ export const TeacherDashboard: React.FC = () => {
       } as any).select();
 
       const obj: MaterialItem = {
-        id: data?.[0]?.id || `m-${Date.now()}`,
+        id: (data as any)?.[0]?.id || `m-${Date.now()}`,
         title: newMaterial.title,
         fileType: newMaterial.fileType,
         fileUrl: newMaterial.fileUrl || 'https://supabase.com/material.pdf',
@@ -373,7 +373,7 @@ export const TeacherDashboard: React.FC = () => {
       } as any).select();
 
       const obj: AssignmentItem = {
-        id: data?.[0]?.id || `a-${Date.now()}`,
+        id: (data as any)?.[0]?.id || `a-${Date.now()}`,
         title: newAssignment.title,
         description: newAssignment.description,
         dueDate: newAssignment.dueDate || new Date().toISOString().slice(0, 10),
@@ -402,7 +402,7 @@ export const TeacherDashboard: React.FC = () => {
       } as any).select();
 
       const newRecord: AttendanceRecord = {
-        id: data?.[0]?.id || `att-${Date.now()}`,
+        id: (data as any)?.[0]?.id || `att-${Date.now()}`,
         studentName: scannedCode.includes('EDU-SISWA') ? `Siswa (${scannedCode.slice(0, 14)})` : scannedCode,
         jurusan: 'Pendidikan',
         qrCode: scannedCode,
