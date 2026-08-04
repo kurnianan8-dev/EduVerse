@@ -61,6 +61,26 @@ export const StudentDashboard: React.FC = () => {
   const studentQrCode = user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '001'}`;
   const studentJurusan = user?.jurusan || 'Pendidikan';
 
+  // Ensure QR Code exists in Supabase DB for logged in student
+  useEffect(() => {
+    if (user?.id) {
+      ensureStudentQrCodeInSupabase();
+    }
+  }, [user?.id]);
+
+  const ensureStudentQrCodeInSupabase = async () => {
+    if (!user?.id) return;
+    try {
+      const { data: profile } = await supabase.from('profiles').select('qr_code').eq('id', user.id).single();
+      if (!(profile as any)?.qr_code) {
+        const generatedQr = `EDU-SISWA-${user.id.slice(0, 8)}`;
+        await (supabase as any).from('profiles').update({ qr_code: generatedQr }).eq('id', user.id);
+      }
+    } catch (err) {
+      console.warn('Syncing QR Code to Supabase profile:', err);
+    }
+  };
+
   // Fetch materials & assignments from Supabase DB
   useEffect(() => {
     fetchSupabaseData();
@@ -114,6 +134,37 @@ export const StudentDashboard: React.FC = () => {
     } catch (err) {
       console.warn('Error fetching student Supabase data:', err);
     }
+  };
+
+  // High-Quality PNG Download of Student's QR Code
+  const handleDownloadQR = () => {
+    const svgElement = document.getElementById('student-qr-svg') as SVGElement | null;
+    if (!svgElement) return;
+
+    const svgData = new XMLSerializer().serializeToString(svgElement);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+
+    img.onload = () => {
+      canvas.width = 800;
+      canvas.height = 800;
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      }
+      const pngUrl = canvas.toDataURL('image/png');
+      const downloadLink = document.createElement('a');
+      const safeName = (user?.fullName || user?.email || 'Siswa').replace(/[^a-zA-Z0-9]/g, '_');
+      downloadLink.href = pngUrl;
+      downloadLink.download = `QR_Absensi_${safeName}.png`;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+    };
+
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
   };
 
   const handleSubmissionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -238,7 +289,7 @@ export const StudentDashboard: React.FC = () => {
 
           <div className="p-6 rounded-2xl bg-white text-slate-900 space-y-3 shadow-xl inline-block w-full border border-slate-200">
             <div className="flex justify-center py-2">
-              <QRCodeSVG value={studentQrCode} size={220} level="H" includeMargin={true} />
+              <QRCodeSVG id="student-qr-svg" value={studentQrCode} size={220} level="H" includeMargin={true} />
             </div>
             <div className="border-t border-slate-200 pt-3 text-center space-y-1">
               <p className="font-bold text-lg text-slate-900">{user?.fullName || user?.email || 'Siswa'}</p>
@@ -248,6 +299,13 @@ export const StudentDashboard: React.FC = () => {
               </span>
             </div>
           </div>
+
+          <button
+            onClick={handleDownloadQR}
+            className="w-full py-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow-lg shadow-orange-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+          >
+            <Download className="w-4 h-4" /> Download QR Absensi (.PNG)
+          </button>
         </div>
       )}
 
