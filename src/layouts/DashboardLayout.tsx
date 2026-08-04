@@ -33,30 +33,13 @@ interface NavItem {
 }
 
 const NAVIGATION_ITEMS: NavItem[] = [
-  // Super Admin Navigation
-  { label: 'Ringkasan Super Admin', href: '/dashboard/super-admin', icon: Shield, roles: ['super_admin'] },
-  { label: 'Sekolah & Multi-Akademi', href: '/dashboard/super-admin/schools', icon: Building2, roles: ['super_admin'], badge: 'Multi-Tenant' },
-  { label: 'Log Audit Sistem', href: '/dashboard/super-admin/audit', icon: Clock, roles: ['super_admin'] },
-
-  // School Admin Navigation
-  { label: 'Konsol Admin Sekolah', href: '/dashboard/school-admin', icon: LayoutDashboard, roles: ['school_admin'] },
-  { label: 'Pengguna & Peran', href: '/dashboard/school-admin/users', icon: Users, roles: ['school_admin'] },
-  { label: 'Kelas & Departemen', href: '/dashboard/school-admin/departments', icon: Building2, roles: ['school_admin'] },
-
   // Teacher / Guru Navigation
-  { label: 'Dasbor Guru', href: '/dashboard/guru', icon: LayoutDashboard, roles: ['teacher', 'guru'] },
-  { label: 'Mata Pelajaran Saya', href: '/dashboard/teacher/courses', icon: BookOpen, roles: ['teacher', 'guru'], badge: '4 Aktif' },
-  { label: 'Penilaian & Tugas', href: '/dashboard/teacher/grades', icon: Award, roles: ['teacher', 'guru'] },
+  { label: 'Dasbor Guru', href: '/dashboard/guru', icon: LayoutDashboard, roles: ['guru', 'teacher'] },
+  { label: 'Mata Pelajaran Saya', href: '/dashboard/guru', icon: BookOpen, roles: ['guru', 'teacher'] },
 
   // Student / Siswa Navigation
-  { label: 'Ruang Belajar Siswa', href: '/dashboard/siswa', icon: StudentIcon, roles: ['student', 'siswa'] },
-  { label: 'Mata Pelajaran Diikuti', href: '/dashboard/student/courses', icon: BookOpen, roles: ['student', 'siswa'] },
-  { label: 'Nilai & Jadwal Saya', href: '/dashboard/student/grades', icon: Award, roles: ['student', 'siswa'] },
-
-  // Parent Navigation
-  { label: 'Portal Orang Tua', href: '/dashboard/parent', icon: UserCheck, roles: ['parent'] },
-  { label: 'Presensi Anak', href: '/dashboard/parent/attendance', icon: Clock, roles: ['parent'] },
-  { label: 'Rapor & Hasil Belajar', href: '/dashboard/parent/reports', icon: Award, roles: ['parent'] },
+  { label: 'Ruang Belajar Siswa', href: '/dashboard/siswa', icon: StudentIcon, roles: ['siswa', 'student'] },
+  { label: 'Mata Pelajaran Diikuti', href: '/dashboard/siswa', icon: BookOpen, roles: ['siswa', 'student'] },
 ];
 
 export const DashboardLayout: React.FC = () => {

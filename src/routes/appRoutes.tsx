@@ -11,21 +11,11 @@ import { NotFound } from '../pages/common/NotFound';
 import { Profile } from '../pages/common/Profile';
 import { Loader2 } from 'lucide-react';
 
-// Lazy loaded dashboard placeholders
-const SuperAdminDashboard = lazy(() =>
-  import('../pages/dashboards/SuperAdminDashboard').then((m) => ({ default: m.SuperAdminDashboard }))
-);
-const SchoolAdminDashboard = lazy(() =>
-  import('../pages/dashboards/SchoolAdminDashboard').then((m) => ({ default: m.SchoolAdminDashboard }))
-);
 const TeacherDashboard = lazy(() =>
   import('../pages/dashboards/TeacherDashboard').then((m) => ({ default: m.TeacherDashboard }))
 );
 const StudentDashboard = lazy(() =>
   import('../pages/dashboards/StudentDashboard').then((m) => ({ default: m.StudentDashboard }))
-);
-const ParentDashboard = lazy(() =>
-  import('../pages/dashboards/ParentDashboard').then((m) => ({ default: m.ParentDashboard }))
 );
 
 const LazyLoader = () => (
@@ -37,7 +27,7 @@ const LazyLoader = () => (
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <Navigate to="/dashboard/school-admin" replace />,
+    element: <Navigate to="/login" replace />,
   },
   {
     path: '/register',
@@ -70,72 +60,12 @@ export const router = createBrowserRouter([
     children: [
       {
         path: '',
-        element: <Navigate to="/dashboard/school-admin" replace />,
-      },
-      {
-        path: 'super-admin',
-        element: (
-          <RoleGuard allowedRoles={['super_admin']}>
-            <Suspense fallback={<LazyLoader />}>
-              <SuperAdminDashboard />
-            </Suspense>
-          </RoleGuard>
-        ),
-      },
-      {
-        path: 'super-admin/*',
-        element: (
-          <RoleGuard allowedRoles={['super_admin']}>
-            <Suspense fallback={<LazyLoader />}>
-              <SuperAdminDashboard />
-            </Suspense>
-          </RoleGuard>
-        ),
-      },
-      {
-        path: 'school-admin',
-        element: (
-          <RoleGuard allowedRoles={['school_admin']}>
-            <Suspense fallback={<LazyLoader />}>
-              <SchoolAdminDashboard />
-            </Suspense>
-          </RoleGuard>
-        ),
-      },
-      {
-        path: 'school-admin/*',
-        element: (
-          <RoleGuard allowedRoles={['school_admin']}>
-            <Suspense fallback={<LazyLoader />}>
-              <SchoolAdminDashboard />
-            </Suspense>
-          </RoleGuard>
-        ),
-      },
-      {
-        path: 'teacher',
-        element: (
-          <RoleGuard allowedRoles={['teacher', 'guru', 'school_admin', 'super_admin']}>
-            <Suspense fallback={<LazyLoader />}>
-              <TeacherDashboard />
-            </Suspense>
-          </RoleGuard>
-        ),
-      },
-      {
-        path: 'teacher/*',
-        element: (
-          <RoleGuard allowedRoles={['teacher', 'guru', 'school_admin', 'super_admin']}>
-            <Suspense fallback={<LazyLoader />}>
-              <TeacherDashboard />
-            </Suspense>
-          </RoleGuard>
-        ),
+        element: <Navigate to="/dashboard/guru" replace />,
       },
       {
         path: 'guru',
         element: (
-          <RoleGuard allowedRoles={['teacher', 'guru', 'school_admin', 'super_admin']}>
+          <RoleGuard allowedRoles={['guru', 'teacher']}>
             <Suspense fallback={<LazyLoader />}>
               <TeacherDashboard />
             </Suspense>
@@ -145,7 +75,7 @@ export const router = createBrowserRouter([
       {
         path: 'guru/*',
         element: (
-          <RoleGuard allowedRoles={['teacher', 'guru', 'school_admin', 'super_admin']}>
+          <RoleGuard allowedRoles={['guru', 'teacher']}>
             <Suspense fallback={<LazyLoader />}>
               <TeacherDashboard />
             </Suspense>
@@ -153,21 +83,21 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: 'student',
+        path: 'teacher',
         element: (
-          <RoleGuard allowedRoles={['student', 'siswa']}>
+          <RoleGuard allowedRoles={['guru', 'teacher']}>
             <Suspense fallback={<LazyLoader />}>
-              <StudentDashboard />
+              <TeacherDashboard />
             </Suspense>
           </RoleGuard>
         ),
       },
       {
-        path: 'student/*',
+        path: 'teacher/*',
         element: (
-          <RoleGuard allowedRoles={['student', 'siswa']}>
+          <RoleGuard allowedRoles={['guru', 'teacher']}>
             <Suspense fallback={<LazyLoader />}>
-              <StudentDashboard />
+              <TeacherDashboard />
             </Suspense>
           </RoleGuard>
         ),
@@ -175,7 +105,7 @@ export const router = createBrowserRouter([
       {
         path: 'siswa',
         element: (
-          <RoleGuard allowedRoles={['student', 'siswa']}>
+          <RoleGuard allowedRoles={['siswa', 'student']}>
             <Suspense fallback={<LazyLoader />}>
               <StudentDashboard />
             </Suspense>
@@ -185,7 +115,7 @@ export const router = createBrowserRouter([
       {
         path: 'siswa/*',
         element: (
-          <RoleGuard allowedRoles={['student', 'siswa']}>
+          <RoleGuard allowedRoles={['siswa', 'student']}>
             <Suspense fallback={<LazyLoader />}>
               <StudentDashboard />
             </Suspense>
@@ -193,21 +123,21 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: 'parent',
+        path: 'student',
         element: (
-          <RoleGuard allowedRoles={['parent']}>
+          <RoleGuard allowedRoles={['siswa', 'student']}>
             <Suspense fallback={<LazyLoader />}>
-              <ParentDashboard />
+              <StudentDashboard />
             </Suspense>
           </RoleGuard>
         ),
       },
       {
-        path: 'parent/*',
+        path: 'student/*',
         element: (
-          <RoleGuard allowedRoles={['parent']}>
+          <RoleGuard allowedRoles={['siswa', 'student']}>
             <Suspense fallback={<LazyLoader />}>
-              <ParentDashboard />
+              <StudentDashboard />
             </Suspense>
           </RoleGuard>
         ),

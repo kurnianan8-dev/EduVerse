@@ -91,12 +91,12 @@ export const TeacherDashboard: React.FC = () => {
   ]);
 
   const [materials, setMaterials] = useState<MaterialItem[]>([
-    { id: 'm1', title: 'Slide Bab 1 - Pengantar Dualisme Gelombang (PDF)', fileType: 'pdf', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', fileName: 'Dualisme_Gelombang.pdf', description: 'Materi dasar bab 1', className: 'Kelas 10 IPA 1' },
-    { id: 'm2', title: 'Video Simulasi Operator Schrödinger', fileType: 'video', fileUrl: 'https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4', fileName: 'Schrodinger_Simulasi.mp4', description: 'Simulasi grafik fungsi gelombang', className: 'Kelas 10 IPA 1' },
+    { id: 'm1', title: 'Slide Bab 1 - Pengantar Dualisme Gelombang (PDF)', fileType: 'pdf', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', fileName: 'Dualisme_Gelombang.pdf', description: 'Materi dasar bab 1 (PDF)', className: 'Kelas 10 IPA 1' },
+    { id: 'm2', title: 'Modul Praktikum Interferometri Laser (DOCX)', fileType: 'word', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', fileName: 'Modul_Praktikum.docx', description: 'Panduan eksperimen laboratorium (DOCX)', className: 'Kelas 10 IPA 1' },
   ]);
 
   const [assignments, setAssignments] = useState<AssignmentItem[]>([
-    { id: 'a1', title: 'Tugas 1: Laporan Praktikum Interferometer', description: 'Kerjakan secara kelompok dan unggah berkas PDF/DOCX', dueDate: '2026-08-15', className: 'Kelas 10 IPA 1' },
+    { id: 'a1', title: 'Tugas 1: Laporan Praktikum Dualisme', description: 'Kerjakan secara kelompok dan unggah berkas PDF/DOC/DOCX', dueDate: '2026-08-15', className: 'Kelas 10 IPA 1' },
   ]);
 
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([
@@ -178,18 +178,23 @@ export const TeacherDashboard: React.FC = () => {
     fetchSupabaseData();
   }, []);
 
-  // Camera Helper Functions
+  // Camera Helper Functions (Prioritize Back Camera / FacingMode Environment)
   const startCamera = async () => {
     setCameraError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'environment' } } });
+      } catch (e) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setCameraActive(true);
       }
     } catch (err: any) {
       console.warn('Camera permission denied or unavailable:', err.message);
-      setCameraError('Kamera tidak dapat diakses atau izin ditolak. Silakan gunakan opsi simpan/masukkan QR Code manual di bawah.');
+      setCameraError('Kamera belakang tidak dapat diakses atau izin ditolak. Silakan gunakan opsi masukkan QR Code manual di bawah.');
     }
   };
 
@@ -248,25 +253,38 @@ export const TeacherDashboard: React.FC = () => {
     setShowClassModal(false);
   };
 
-  // 3. Material Upload & File Handler (PDF, DOC, DOCX, PPT, PPTX, Gambar, Video)
-  const handleMaterialFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 3. Material Upload & File Handler (PDF, DOC, DOCX)
+  const handleMaterialFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const fakeUrl = URL.createObjectURL(file);
       const ext = file.name.split('.').pop()?.toLowerCase();
-
       let detectedType: 'pdf' | 'word' | 'ppt' | 'image' | 'video' = 'pdf';
       if (ext === 'doc' || ext === 'docx') detectedType = 'word';
-      else if (ext === 'ppt' || ext === 'pptx') detectedType = 'ppt';
-      else if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) detectedType = 'image';
-      else if (['mp4', 'avi', 'mkv', 'mov', 'webm'].includes(ext || '')) detectedType = 'video';
+
+      // Attempt uploading to Supabase Storage if available
+      let publicFileUrl = URL.createObjectURL(file);
+      if (!isMockEnvironment) {
+        try {
+          const filePath = `materials/${Date.now()}_${file.name}`;
+          const { data: uploadData, error: uploadErr } = await supabase.storage
+            .from('materials')
+            .upload(filePath, file);
+
+          if (!uploadErr && uploadData) {
+            const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
+            if (urlData?.publicUrl) publicFileUrl = urlData.publicUrl;
+          }
+        } catch (err) {
+          console.warn('Storage upload fallback to object URL:', err);
+        }
+      }
 
       setNewMaterial((prev) => ({
         ...prev,
         title: prev.title || file.name,
         fileName: file.name,
         fileType: detectedType,
-        fileUrl: fakeUrl,
+        fileUrl: publicFileUrl,
       }));
     }
   };
@@ -451,7 +469,7 @@ export const TeacherDashboard: React.FC = () => {
             Selamat Datang, {user?.fullName || 'Prof. Marcus Chen'}
           </h1>
           <p className="text-sm text-slate-300 mt-1">
-            Kelola mata pelajaran, buat kelas, unggah materi (PDF/DOCX/PPTX/Video), buat tugas, dan pindaikan kamera QR Code absensi siswa.
+            Kelola mata pelajaran, buat kelas, unggah materi (PDF/DOC/DOCX), buat tugas, dan pindaikan kamera QR Code absensi siswa.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -484,7 +502,7 @@ export const TeacherDashboard: React.FC = () => {
         >
           <div>
             <span className="text-xs font-semibold text-muted-foreground block">Unggah Materi</span>
-            <span className="text-sm font-bold text-foreground">PDF, DOCX, PPTX, Video</span>
+            <span className="text-sm font-bold text-foreground">PDF, DOC, DOCX</span>
           </div>
           <Upload className="w-5 h-5 text-emerald-600" />
         </button>
@@ -622,7 +640,7 @@ export const TeacherDashboard: React.FC = () => {
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Camera className="w-5 h-5 text-amber-600" /> Rekap Absensi & QR Code Siswa
                 </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian QR Kamera perangkat & Penyimpanan otomatis ke Supabase.</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian QR Kamera Belakang HP & Penyimpanan ke Supabase.</p>
               </div>
               <button
                 onClick={() => setShowScanModal(true)}
@@ -721,7 +739,7 @@ export const TeacherDashboard: React.FC = () => {
               {!cameraActive && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center p-4 space-y-2 text-center bg-black/80">
                   <Camera className="w-10 h-10 text-amber-500 animate-pulse" />
-                  <p className="text-xs text-slate-300">Menghubungkan ke Kamera Perangkat...</p>
+                  <p className="text-xs text-slate-300">Menghubungkan ke Kamera Belakang Perangkat...</p>
                 </div>
               )}
             </div>
@@ -741,7 +759,7 @@ export const TeacherDashboard: React.FC = () => {
                   placeholder="Contoh: EDU-SISWA-001"
                   value={qrInputManual}
                   onChange={(e) => setQrInputManual(e.target.value)}
-                  className="flex-1 px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
                 />
                 <button
                   onClick={() => {
@@ -829,7 +847,7 @@ export const TeacherDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Upload Material with PDF/DOC/DOCX/PPT/PPTX/Image/Video file input */}
+      {/* Modal: Upload Material with PDF/DOC/DOCX file input */}
       {showMaterialModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
@@ -843,10 +861,10 @@ export const TeacherDashboard: React.FC = () => {
             </div>
             <form onSubmit={handleUploadMaterial} className="space-y-3">
               <div className="space-y-1">
-                <label className="text-xs font-bold text-muted-foreground uppercase">Pilih Berkas (PDF, DOC, DOCX, PPT, PPTX, Gambar, Video)</label>
+                <label className="text-xs font-bold text-muted-foreground uppercase">Pilih Berkas (PDF, DOC, DOCX)</label>
                 <input
                   type="file"
-                  accept=".pdf,.doc,.docx,.ppt,.pptx,image/*,video/*"
+                  accept=".pdf,.doc,.docx"
                   onChange={handleMaterialFileChange}
                   className="w-full text-xs text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer"
                 />
@@ -869,9 +887,6 @@ export const TeacherDashboard: React.FC = () => {
                 >
                   <option value="pdf">Format PDF</option>
                   <option value="word">Format Word (DOC/DOCX)</option>
-                  <option value="ppt">Format PPT/PPTX</option>
-                  <option value="image">Format Gambar</option>
-                  <option value="video">Format Video</option>
                 </select>
                 <input
                   type="text"
@@ -932,7 +947,7 @@ export const TeacherDashboard: React.FC = () => {
                 <label className="text-xs font-bold text-muted-foreground uppercase">Lampirkan Berkas Soal/Panduan (Opsional)</label>
                 <input
                   type="file"
-                  accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"
+                  accept=".pdf,.doc,.docx"
                   onChange={handleAssignmentFileChange}
                   className="w-full text-xs text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-teal-600 file:text-white hover:file:bg-teal-500 cursor-pointer"
                 />
