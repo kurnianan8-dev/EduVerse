@@ -1,0 +1,291 @@
+import React, { useState } from 'react';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { AppRole, ROLE_LABELS } from '../types/auth.types';
+import { getRoleBadgeStyle } from '../lib/utils';
+import {
+  GraduationCap,
+  LayoutDashboard,
+  Building2,
+  Users,
+  BookOpen,
+  GraduationCap as StudentIcon,
+  UserCheck,
+  Award,
+  Bell,
+  Search,
+  LogOut,
+  ChevronDown,
+  Menu,
+  X,
+  Sparkles,
+  Shield,
+  Clock,
+  User,
+} from 'lucide-react';
+
+interface NavItem {
+  label: string;
+  href: string;
+  icon: React.ElementType;
+  roles: AppRole[];
+  badge?: string;
+}
+
+const NAVIGATION_ITEMS: NavItem[] = [
+  // Super Admin Navigation
+  { label: 'Ringkasan Super Admin', href: '/dashboard/super-admin', icon: Shield, roles: ['super_admin'] },
+  { label: 'Sekolah & Multi-Akademi', href: '/dashboard/super-admin/schools', icon: Building2, roles: ['super_admin'], badge: 'Multi-Tenant' },
+  { label: 'Log Audit Sistem', href: '/dashboard/super-admin/audit', icon: Clock, roles: ['super_admin'] },
+
+  // School Admin Navigation
+  { label: 'Konsol Admin Sekolah', href: '/dashboard/school-admin', icon: LayoutDashboard, roles: ['school_admin'] },
+  { label: 'Pengguna & Peran', href: '/dashboard/school-admin/users', icon: Users, roles: ['school_admin'] },
+  { label: 'Kelas & Departemen', href: '/dashboard/school-admin/departments', icon: Building2, roles: ['school_admin'] },
+
+  // Teacher Navigation
+  { label: 'Dasbor Guru', href: '/dashboard/teacher', icon: LayoutDashboard, roles: ['teacher'] },
+  { label: 'Mata Pelajaran Saya', href: '/dashboard/teacher/courses', icon: BookOpen, roles: ['teacher'], badge: '4 Aktif' },
+  { label: 'Penilaian & Tugas', href: '/dashboard/teacher/grades', icon: Award, roles: ['teacher'] },
+
+  // Student Navigation
+  { label: 'Ruang Belajar Siswa', href: '/dashboard/student', icon: StudentIcon, roles: ['student'] },
+  { label: 'Mata Pelajaran Diikuti', href: '/dashboard/student/courses', icon: BookOpen, roles: ['student'] },
+  { label: 'Nilai & Jadwal Saya', href: '/dashboard/student/grades', icon: Award, roles: ['student'] },
+
+  // Parent Navigation
+  { label: 'Portal Orang Tua', href: '/dashboard/parent', icon: UserCheck, roles: ['parent'] },
+  { label: 'Presensi Anak', href: '/dashboard/parent/attendance', icon: Clock, roles: ['parent'] },
+  { label: 'Rapor & Hasil Belajar', href: '/dashboard/parent/reports', icon: Award, roles: ['parent'] },
+];
+
+export const DashboardLayout: React.FC = () => {
+  const { user, role, switchRole, logout } = useAuth();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const roleStyle = getRoleBadgeStyle(role);
+
+  const filteredNavItems = NAVIGATION_ITEMS.filter((item) => item.roles.includes(role));
+
+  const handleRoleSwitch = (newRole: AppRole) => {
+    switchRole(newRole);
+    navigate(`/dashboard/${newRole.replace('_', '-')}`);
+  };
+
+  return (
+    <div className="min-h-screen flex bg-background text-foreground font-sans">
+      {/* Sidebar - Desktop */}
+      <aside className="hidden lg:flex w-72 flex-col fixed inset-y-0 z-30 bg-sidebar text-sidebar-foreground border-r border-sidebar-border shadow-xl">
+        {/* Brand Header */}
+        <div className="h-16 px-6 flex items-center justify-between border-b border-sidebar-border">
+          <Link to="/" className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
+              <GraduationCap className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <span className="font-display font-bold text-xl tracking-tight text-white">EduVerse</span>
+              <span className="block text-[10px] font-semibold uppercase tracking-widest text-blue-400">Platform LMS</span>
+            </div>
+          </Link>
+        </div>
+
+        {/* Current Active Role Indicator */}
+        <div className="px-4 py-3 mx-4 mt-4 rounded-xl bg-sidebar-accent/50 border border-sidebar-border">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+            Peran Kerja Saat Ini
+          </div>
+          <div className="flex items-center justify-between">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${roleStyle.bg} ${roleStyle.text} ${roleStyle.border}`}>
+              <Shield className="w-3.5 h-3.5" />
+              {ROLE_LABELS[role]}
+            </span>
+            <span className="text-[11px] text-blue-400 font-mono">RBAC Aktif</span>
+          </div>
+        </div>
+
+        {/* Navigation Links */}
+        <nav className="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto custom-scrollbar">
+          <div className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+            Menu Navigasi
+          </div>
+          {filteredNavItems.map((item) => {
+            const isActive = location.pathname === item.href;
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                to={item.href}
+                className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  isActive
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-md shadow-primary/20'
+                    : 'text-slate-300 hover:bg-sidebar-accent hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Icon className="w-4 h-4" />
+                  <span>{item.label}</span>
+                </div>
+                {item.badge && (
+                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                    {item.badge}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* User Quick Info & Footer */}
+        <div className="p-4 border-t border-sidebar-border bg-sidebar-accent/30">
+          <div className="flex items-center gap-3">
+            <img
+              src={user?.avatarUrl}
+              alt={user?.fullName}
+              className="w-10 h-10 rounded-full object-cover border-2 border-blue-500/30"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-white truncate">{user?.fullName}</p>
+              <p className="text-xs text-slate-400 truncate">{user?.email}</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content Wrapper */}
+      <div className="flex-1 flex flex-col min-w-0 lg:pl-72">
+        {/* Topbar Header */}
+        <header className="h-16 sticky top-0 z-20 bg-card/80 backdrop-blur-md border-b border-border px-4 sm:px-6 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="lg:hidden p-2 rounded-lg text-muted-foreground hover:bg-accent"
+              aria-label="Buka menu"
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+
+            {/* Quick Search */}
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/60 text-muted-foreground border border-border/50 text-xs w-64">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              <span>Cari mata pelajaran, pengguna, jadwal...</span>
+            </div>
+          </div>
+
+          {/* Right Header Action Items */}
+          <div className="flex items-center gap-3">
+            {/* Live Architecture Role Switcher (Dev Mode Toolbar) */}
+            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-accent/80 border border-border text-xs">
+              <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+              <span className="font-medium text-muted-foreground">Ganti Peran:</span>
+              <select
+                value={role}
+                onChange={(e) => handleRoleSwitch(e.target.value as AppRole)}
+                className="bg-transparent font-semibold text-foreground focus:outline-none cursor-pointer"
+              >
+                <option value="super_admin">Super Admin</option>
+                <option value="school_admin">Admin Sekolah</option>
+                <option value="teacher">Guru</option>
+                <option value="student">Siswa</option>
+                <option value="parent">Orang Tua</option>
+              </select>
+            </div>
+
+            {/* Notifications */}
+            <button className="relative p-2 rounded-lg text-muted-foreground hover:bg-accent transition-colors" title="Notifikasi">
+              <Bell className="w-5 h-5" />
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-600 animate-ping" />
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-600" />
+            </button>
+
+            {/* User Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-accent transition-colors"
+              >
+                <img
+                  src={user?.avatarUrl}
+                  alt={user?.fullName}
+                  className="w-8 h-8 rounded-full object-cover border border-border"
+                />
+                <span className="hidden sm:inline text-xs font-semibold text-foreground">
+                  {user?.fullName}
+                </span>
+                <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+              </button>
+
+              {userDropdownOpen && (
+                <div className="absolute right-0 mt-2 w-56 rounded-xl bg-card border border-border shadow-xl p-2 z-50 animate-in fade-in zoom-in-95">
+                  <div className="px-3 py-2 border-b border-border mb-1">
+                    <p className="text-xs font-bold text-foreground truncate">{user?.fullName}</p>
+                    <p className="text-[11px] text-muted-foreground truncate">{user?.email}</p>
+                  </div>
+                  <Link
+                    to="/dashboard/profile"
+                    onClick={() => setUserDropdownOpen(false)}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-foreground hover:bg-accent transition-colors"
+                  >
+                    <User className="w-4 h-4 text-muted-foreground" /> Lihat Profil
+                  </Link>
+                  <button
+                    onClick={logout}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" /> Keluar
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {/* Mobile Slide-out Menu */}
+        {mobileMenuOpen && (
+          <div className="lg:hidden fixed inset-0 z-40 bg-background/80 backdrop-blur-md flex flex-col pt-16 px-6 pb-6">
+            <div className="mb-4">
+              <label className="text-xs font-semibold text-muted-foreground mb-1 block">Ganti Peran Demonstrasi:</label>
+              <select
+                value={role}
+                onChange={(e) => {
+                  handleRoleSwitch(e.target.value as AppRole);
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full p-2 rounded-lg bg-card border border-border text-sm font-semibold"
+              >
+                <option value="super_admin">Super Admin</option>
+                <option value="school_admin">Admin Sekolah</option>
+                <option value="teacher">Guru</option>
+                <option value="student">Siswa</option>
+                <option value="parent">Orang Tua</option>
+              </select>
+            </div>
+            <nav className="space-y-2 flex-1">
+              {filteredNavItems.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    to={item.href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold bg-accent text-foreground"
+                  >
+                    <Icon className="w-5 h-5 text-primary" />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+        )}
+
+        {/* Main Content Area */}
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+};
