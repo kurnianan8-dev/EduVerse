@@ -29,7 +29,7 @@ interface SchoolUser {
 const INITIAL_USERS: SchoolUser[] = [
   { id: 'usr-1', name: 'Prof. Marcus Chen', email: 'm.chen@horizonacademy.edu', role: 'teacher', department: 'Fisika & Astronomi', status: 'Aktif' },
   { id: 'usr-2', name: 'Sophia Taylor', email: 'sophia.taylor@student.eduverse.io', role: 'student', department: 'Kelas 11-A', status: 'Aktif' },
-  { id: 'usr-3', name: 'David Taylor', email: 'david.taylor@gmail.com', role: 'parent', department: 'Orang Tua dari Sophia', status: 'Aktif' },
+  { id: 'usr-3', name: 'David Taylor', email: 'david.taylor@gmail.com', role: 'student', department: 'Siswa Kelas 10-A', status: 'Aktif' },
   { id: 'usr-4', name: 'Dr. Sarah Lin', email: 's.lin@horizonacademy.edu', role: 'teacher', department: 'Matematika', status: 'Aktif' },
   { id: 'usr-5', name: 'Ethan Vance', email: 'e.vance@student.eduverse.io', role: 'student', department: 'Kelas 12-B', status: 'Aktif' },
 ];
