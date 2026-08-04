@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
+import { Html5Qrcode } from 'html5-qrcode';
 
 interface CourseModule {
   id: string;
@@ -85,12 +86,13 @@ interface AttendanceRecord {
 export const TeacherDashboard: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
-  const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Camera & Scan State
-  const [cameraActive, setCameraActive] = useState(false);
+  // Scanner References & States
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const lastScannedCodeRef = useRef<string>('');
+  const lastScannedTimeRef = useRef<number>(0);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [qrInputManual, setQrInputManual] = useState('');
+  const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Main Data States (Fetched directly from Supabase DB)
   const [courses, setCourses] = useState<CourseModule[]>([]);
@@ -240,49 +242,135 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Camera Helper Functions (Prioritize Back Camera / FacingMode Environment / Laptop Webcam)
-  const startCamera = async () => {
-    setCameraError(null);
-    try {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'environment' } } });
-      } catch (e1) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        } catch (e2) {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        }
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setCameraActive(true);
-      }
-    } catch (err: any) {
-      console.warn('Camera permission denied or unavailable:', err.message);
-      setCameraError('Kamera tidak dapat diakses atau izin ditolak. Silakan gunakan opsi masukkan QR Code manual di bawah.');
-    }
-  };
-
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-    }
-    setCameraActive(false);
-  };
-
+  // Real-Time Continuous Automatic QR Scanner Loop (Html5Qrcode)
   useEffect(() => {
     if (showScanModal) {
-      startCamera();
-    } else {
-      stopCamera();
+      setCameraError(null);
+      setScanFeedback(null);
+
+      const html5QrCode = new Html5Qrcode("reader");
+      scannerRef.current = html5QrCode;
+
+      const onScanSuccess = async (decodedText: string) => {
+        const now = Date.now();
+        // Cooldown: Ignore duplicate scans of the exact same QR code within 3.5 seconds
+        if (lastScannedCodeRef.current === decodedText && now - lastScannedTimeRef.current < 3500) {
+          return;
+        }
+
+        lastScannedCodeRef.current = decodedText;
+        lastScannedTimeRef.current = now;
+
+        await processAutoScan(decodedText);
+      };
+
+      const config = { fps: 10, qrbox: { width: 220, height: 220 } };
+
+      // Priority 1: Back camera facingMode environment for mobile devices
+      html5QrCode
+        .start({ facingMode: "environment" }, config, onScanSuccess, () => {})
+        .catch(() => {
+          // Priority 2: Fallback to available camera device list
+          Html5Qrcode.getCameras()
+            .then((devices) => {
+              if (devices && devices.length > 0) {
+                const backCam =
+                  devices.find(
+                    (d) =>
+                      d.label.toLowerCase().includes('back') ||
+                      d.label.toLowerCase().includes('rear') ||
+                      d.label.toLowerCase().includes('environment')
+                  ) || devices[0];
+
+                html5QrCode.start(backCam.id, config, onScanSuccess, () => {}).catch(() => {
+                  setCameraError('Kamera tidak dapat diakses atau izin ditolak.');
+                });
+              } else {
+                setCameraError('Kamera tidak ditemukan pada perangkat.');
+              }
+            })
+            .catch(() => {
+              setCameraError('Kamera tidak dapat diakses.');
+            });
+        });
+
+      return () => {
+        if (scannerRef.current && scannerRef.current.isScanning) {
+          scannerRef.current.stop().catch(() => {});
+        }
+      };
     }
-    return () => {
-      stopCamera();
-    };
   }, [showScanModal]);
+
+  // Automatic Scan Processing & Supabase Insertion (Camera Stays Active!)
+  const processAutoScan = async (scannedCode: string) => {
+    const cleanCode = scannedCode.trim();
+    if (!cleanCode) return;
+
+    try {
+      // 1. Search student profile in Supabase by qr_code or id
+      let { data: studentProfiles } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('qr_code', cleanCode);
+
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data: idProfiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', cleanCode);
+        studentProfiles = idProfiles;
+      }
+
+      if (!studentProfiles || studentProfiles.length === 0) {
+        setScanFeedback({
+          type: 'error',
+          message: 'QR Code tidak terdaftar.',
+        });
+        setTimeout(() => setScanFeedback(null), 3500);
+        return;
+      }
+
+      const student: any = (studentProfiles as any[])[0];
+      const studentName = student.full_name || student.email || 'Siswa';
+      const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+      // 2. Insert attendance record into Supabase
+      const { data, error } = await (supabase as any).from('attendance_records').insert({
+        student_id: student.id,
+        status: 'hadir',
+        scanned_at: new Date().toISOString(),
+      }).select();
+
+      if (error) throw error;
+
+      // 3. Update attendance state with REAL student profile data
+      const newRecord: AttendanceRecord = {
+        id: (data as any)?.[0]?.id || `att-${Date.now()}`,
+        studentName: studentName,
+        jurusan: student.jurusan || 'Umum',
+        qrCode: student.qr_code || student.id,
+        status: 'Hadir',
+        scannedAt: `${timestampStr} WIB`,
+      };
+
+      setAttendanceRecords((prev) => [newRecord, ...prev]);
+
+      // 4. Display Toast Feedback (Camera stays open so teacher can scan next student!)
+      setScanFeedback({
+        type: 'success',
+        message: `Absensi berhasil: ${studentName}`,
+      });
+
+      setTimeout(() => setScanFeedback(null), 3500);
+    } catch (err: any) {
+      setScanFeedback({
+        type: 'error',
+        message: `Gagal menyimpan absensi: ${err.message}`,
+      });
+      setTimeout(() => setScanFeedback(null), 3500);
+    }
+  };
 
   // 1. Create Course in Supabase
   const handleCreateCourse = async (e: React.FormEvent) => {
@@ -470,61 +558,6 @@ export const TeacherDashboard: React.FC = () => {
       setFeedbackInput('');
     } catch (err: any) {
       alert(`Gagal menyimpan nilai: ${err.message}`);
-    }
-  };
-
-  // 6. Scan QR Code Check-in & Real Supabase Profile Search
-  const handleScanQrCode = async (scannedCode: string) => {
-    const cleanCode = scannedCode.trim();
-    if (!cleanCode) return;
-
-    try {
-      // 1. Search student profile in Supabase by qr_code or id
-      let { data: studentProfiles } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('qr_code', cleanCode);
-
-      if (!studentProfiles || studentProfiles.length === 0) {
-        const { data: idProfiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', cleanCode);
-        studentProfiles = idProfiles;
-      }
-
-      if (!studentProfiles || studentProfiles.length === 0) {
-        alert(`❌ Data siswa tidak ditemukan di Supabase database untuk Kode QR: "${cleanCode}".`);
-        return;
-      }
-
-      const student: any = (studentProfiles as any[])[0];
-      const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-
-      // 2. Insert attendance record into Supabase
-      const { data, error } = await (supabase as any).from('attendance_records').insert({
-        student_id: student.id,
-        status: 'hadir',
-        scanned_at: new Date().toISOString(),
-      }).select();
-
-      if (error) throw error;
-
-      // 3. Update attendance state with REAL student profile data
-      const newRecord: AttendanceRecord = {
-        id: (data as any)?.[0]?.id || `att-${Date.now()}`,
-        studentName: student.full_name || student.email,
-        jurusan: student.jurusan || 'Umum',
-        qrCode: student.qr_code || student.id,
-        status: 'Hadir',
-        scannedAt: `${timestampStr} WIB`,
-      };
-
-      setAttendanceRecords((prev) => [newRecord, ...prev]);
-      setQrInputManual('');
-      alert(`✅ Absensi Berhasil! Siswa "${student.full_name || student.email}" (${student.jurusan || 'Umum'}) dicatat HADIR.`);
-    } catch (err: any) {
-      alert(`Gagal menyimpan absensi: ${err.message}`);
     }
   };
 
@@ -794,13 +827,13 @@ export const TeacherDashboard: React.FC = () => {
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Camera className="w-5 h-5 text-amber-600" /> Rekap Absensi & QR Code Siswa
                 </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian Kamera Belakang HP / Webcam Laptop & Penyimpanan ke Supabase.</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian Otomatis Kamera Belakang HP / Laptop & Penyimpanan ke Supabase.</p>
               </div>
               <button
                 onClick={() => setShowScanModal(true)}
                 className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow flex items-center gap-1 cursor-pointer"
               >
-                <Camera className="w-3.5 h-3.5" /> Pindai Kamera
+                <Camera className="w-3.5 h-3.5" /> Pindai Kamera Otomatis
               </button>
             </div>
 
@@ -820,7 +853,7 @@ export const TeacherDashboard: React.FC = () => {
                   {attendanceRecords.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="p-4 text-center text-xs text-muted-foreground italic">
-                        Belum ada data absensi. Klik "Pindai Kamera" untuk memindai QR Code siswa.
+                        Belum ada data absensi. Klik "Pindai Kamera Otomatis" untuk memindai QR Code siswa.
                       </td>
                     </tr>
                   ) : (
@@ -974,29 +1007,44 @@ export const TeacherDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Camera QR Scan & Device Video Stream */}
+      {/* Modal: Automatic Continuous Camera QR Scanner */}
       {showScanModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 text-center">
             <div className="flex items-center justify-between border-b border-border pb-3 text-left">
-              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                <Camera className="w-5 h-5 text-amber-600" /> Pindai QR Code Absensi Siswa
-              </h3>
+              <div>
+                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                  <Camera className="w-5 h-5 text-amber-600" /> Pindai QR Code Absensi Otomatis
+                </h3>
+                <p className="text-[11px] text-muted-foreground">Kamera aktif terus untuk memindai siswa berurutan.</p>
+              </div>
               <button onClick={() => setShowScanModal(false)} className="text-muted-foreground hover:text-foreground cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Video Element connected to device camera */}
-            <div className="relative rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 aspect-video flex items-center justify-center">
-              <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
-              {!cameraActive && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 space-y-2 text-center bg-black/80">
-                  <Camera className="w-10 h-10 text-amber-500 animate-pulse" />
-                  <p className="text-xs text-slate-300">Menghubungkan ke Kamera Perangkat / Webcam...</p>
-                </div>
-              )}
+            {/* Html5Qrcode Realtime Scanner Container */}
+            <div className="relative rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 aspect-square flex items-center justify-center">
+              <div id="reader" className="w-full h-full object-cover"></div>
             </div>
+
+            {/* Toast Feedback Notification Banner */}
+            {scanFeedback && (
+              <div
+                className={`p-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-in zoom-in-95 ${
+                  scanFeedback.type === 'success'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                }`}
+              >
+                {scanFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                )}
+                <span>{scanFeedback.message}</span>
+              </div>
+            )}
 
             {cameraError && (
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-2">
@@ -1004,32 +1052,6 @@ export const TeacherDashboard: React.FC = () => {
                 <span>{cameraError}</span>
               </div>
             )}
-
-            <div className="space-y-2 text-left pt-2">
-              <label className="text-xs font-bold text-muted-foreground uppercase">Masukkan / Deteksi Kode QR Siswa</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Masukkan Kode QR Siswa (contoh: EDU-SISWA-...)"
-                  value={qrInputManual}
-                  onChange={(e) => setQrInputManual(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-                <button
-                  onClick={() => {
-                    if (!qrInputManual) {
-                      alert('Silakan masukkan Kode QR atau ID Siswa.');
-                      return;
-                    }
-                    handleScanQrCode(qrInputManual);
-                    setShowScanModal(false);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs cursor-pointer"
-                >
-                  Absenkan
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}
