@@ -114,9 +114,16 @@ export const TeacherDashboard: React.FC = () => {
   // Form Inputs
   const [newCourse, setNewCourse] = useState({ code: '', name: '' });
   const [newClass, setNewClass] = useState({ name: '', courseName: 'Fisika Kuantum Dasar' });
-  const [newMaterial, setNewMaterial] = useState({
+  const [newMaterial, setNewMaterial] = useState<{
+    title: string;
+    fileType: 'pdf' | 'word' | 'ppt' | 'image' | 'video';
+    fileUrl: string;
+    fileName: string;
+    description: string;
+    className: string;
+  }>({
     title: '',
-    fileType: 'pdf' as const,
+    fileType: 'pdf',
     fileUrl: '',
     fileName: '',
     description: '',
