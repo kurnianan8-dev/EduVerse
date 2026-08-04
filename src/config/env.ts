@@ -7,9 +7,9 @@ const envSchema = z.object({
 });
 
 const _env = envSchema.safeParse({
-  VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL || 'https://mock-eduverse.supabase.co',
-  VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || 'mock-anon-key-eduverse-dev-mode',
-  VITE_APP_ENV: import.meta.env.VITE_APP_ENV || 'development',
+  VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL || 'https://sgeuusdwmulifctzvnic.supabase.co',
+  VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_-gyCsnf0MF0qOahxiZ80FA_V9_9_4Om',
+  VITE_APP_ENV: import.meta.env.VITE_APP_ENV || 'production',
 });
 
 if (!_env.success) {
@@ -19,11 +19,9 @@ if (!_env.success) {
 export const env = _env.success
   ? _env.data
   : {
-      VITE_SUPABASE_URL: 'https://mock-eduverse.supabase.co',
-      VITE_SUPABASE_ANON_KEY: 'mock-anon-key-eduverse-dev-mode',
-      VITE_APP_ENV: 'development' as const,
+      VITE_SUPABASE_URL: 'https://sgeuusdwmulifctzvnic.supabase.co',
+      VITE_SUPABASE_ANON_KEY: 'sb_publishable_-gyCsnf0MF0qOahxiZ80FA_V9_9_4Om',
+      VITE_APP_ENV: 'production' as const,
     };
 
-export const isMockEnvironment =
-  env.VITE_SUPABASE_URL.includes('mock-eduverse') ||
-  env.VITE_SUPABASE_ANON_KEY.includes('mock-anon-key');
+export const isMockEnvironment = false;

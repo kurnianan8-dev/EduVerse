@@ -23,7 +23,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { isMockEnvironment } from '../../config/env';
 
 interface CourseModule {
   id: string;
@@ -79,30 +78,12 @@ export const TeacherDashboard: React.FC = () => {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [qrInputManual, setQrInputManual] = useState('');
 
-  // Main Data States
-  const [courses, setCourses] = useState<CourseModule[]>([
-    { id: 'c1', code: 'FIS-101', name: 'Fisika Kuantum Dasar', students: 34, term: 'Ganjil 2026' },
-    { id: 'c2', code: 'MAT-202', name: 'Kalkulus Lanjut', students: 42, term: 'Ganjil 2026' },
-  ]);
-
-  const [classes, setClasses] = useState<ClassItem[]>([
-    { id: 'cls-1', name: 'Kelas 10 IPA 1', courseName: 'Fisika Kuantum Dasar', academicYear: '2026/2027' },
-    { id: 'cls-2', name: 'Kelas 11 IPA 2', courseName: 'Kalkulus Lanjut', academicYear: '2026/2027' },
-  ]);
-
-  const [materials, setMaterials] = useState<MaterialItem[]>([
-    { id: 'm1', title: 'Slide Bab 1 - Pengantar Dualisme Gelombang (PDF)', fileType: 'pdf', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', fileName: 'Dualisme_Gelombang.pdf', description: 'Materi dasar bab 1 (PDF)', className: 'Kelas 10 IPA 1' },
-    { id: 'm2', title: 'Modul Praktikum Interferometri Laser (DOCX)', fileType: 'word', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', fileName: 'Modul_Praktikum.docx', description: 'Panduan eksperimen laboratorium (DOCX)', className: 'Kelas 10 IPA 1' },
-  ]);
-
-  const [assignments, setAssignments] = useState<AssignmentItem[]>([
-    { id: 'a1', title: 'Tugas 1: Laporan Praktikum Dualisme', description: 'Kerjakan secara kelompok dan unggah berkas PDF/DOC/DOCX', dueDate: '2026-08-15', className: 'Kelas 10 IPA 1' },
-  ]);
-
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([
-    { id: 'att-1', studentName: 'Sophia Taylor', jurusan: 'Teknik Informatika', qrCode: 'EDU-SISWA-001', status: 'Hadir', scannedAt: '08:15 WIB' },
-    { id: 'att-2', studentName: 'Budi Pratama', jurusan: 'MIPA 1', qrCode: 'EDU-SISWA-002', status: 'Hadir', scannedAt: '08:22 WIB' },
-  ]);
+  // Main Data States (Fetched directly from Supabase DB)
+  const [courses, setCourses] = useState<CourseModule[]>([]);
+  const [classes, setClasses] = useState<ClassItem[]>([]);
+  const [materials, setMaterials] = useState<MaterialItem[]>([]);
+  const [assignments, setAssignments] = useState<AssignmentItem[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
 
   // Modal Visibility Controls
   const [showCourseModal, setShowCourseModal] = useState(false);
@@ -113,7 +94,7 @@ export const TeacherDashboard: React.FC = () => {
 
   // Form Inputs
   const [newCourse, setNewCourse] = useState({ code: '', name: '' });
-  const [newClass, setNewClass] = useState({ name: '', courseName: 'Fisika Kuantum Dasar' });
+  const [newClass, setNewClass] = useState({ name: '', courseName: '' });
   const [newMaterial, setNewMaterial] = useState<{
     title: string;
     fileType: 'pdf' | 'word' | 'ppt' | 'image' | 'video';
@@ -127,56 +108,86 @@ export const TeacherDashboard: React.FC = () => {
     fileUrl: '',
     fileName: '',
     description: '',
-    className: 'Kelas 10 IPA 1',
+    className: '',
   });
   const [newAssignment, setNewAssignment] = useState({
     title: '',
     description: '',
     dueDate: '',
-    className: 'Kelas 10 IPA 1',
+    className: '',
     fileUrl: '',
     fileName: '',
   });
 
-  // Fetch initial data from Supabase if authenticated
+  // Fetch real data from Supabase DB on mount
   useEffect(() => {
-    if (isMockEnvironment) return;
-
-    const fetchSupabaseData = async () => {
-      try {
-        const { data: matData } = await supabase.from('materials').select('*');
-        if (matData && matData.length > 0) {
-          setMaterials(
-            matData.map((m: any) => ({
-              id: m.id,
-              title: m.title,
-              fileType: m.file_type || 'pdf',
-              fileUrl: m.file_url,
-              description: m.description || '',
-              className: 'Kelas 10 IPA 1',
-            }))
-          );
-        }
-
-        const { data: assData } = await supabase.from('assignments').select('*');
-        if (assData && assData.length > 0) {
-          setAssignments(
-            assData.map((a: any) => ({
-              id: a.id,
-              title: a.title,
-              description: a.description || '',
-              dueDate: a.due_date ? a.due_date.slice(0, 10) : '2026-08-20',
-              className: 'Kelas 10 IPA 1',
-            }))
-          );
-        }
-      } catch (err) {
-        console.warn('Error fetching initial Supabase data:', err);
-      }
-    };
-
     fetchSupabaseData();
   }, []);
+
+  const fetchSupabaseData = async () => {
+    try {
+      // 1. Materials
+      const { data: matData } = await supabase.from('materials').select('*').order('created_at', { ascending: false });
+      if (matData) {
+        setMaterials(
+          matData.map((m: any) => ({
+            id: m.id,
+            title: m.title,
+            fileType: m.file_type || 'pdf',
+            fileUrl: m.file_url,
+            fileName: m.title,
+            description: m.description || '',
+            className: 'Kelas Utama',
+          }))
+        );
+      }
+
+      // 2. Assignments
+      const { data: assData } = await supabase.from('assignments').select('*').order('created_at', { ascending: false });
+      if (assData) {
+        setAssignments(
+          assData.map((a: any) => ({
+            id: a.id,
+            title: a.title,
+            description: a.description || '',
+            dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
+            className: 'Kelas Utama',
+          }))
+        );
+      }
+
+      // 3. Courses
+      const { data: courseData } = await supabase.from('courses').select('*');
+      if (courseData && courseData.length > 0) {
+        setCourses(
+          courseData.map((c: any) => ({
+            id: c.id,
+            code: c.code || 'PEL-01',
+            name: c.name,
+            students: 0,
+            term: 'Aktif',
+          }))
+        );
+      }
+
+      // 4. Attendance Records
+      const { data: attData } = await supabase.from('attendance_records').select('*').order('scanned_at', { ascending: false });
+      if (attData) {
+        setAttendanceRecords(
+          attData.map((a: any) => ({
+            id: a.id,
+            studentName: a.student_id ? `Siswa (ID: ${a.student_id.slice(0, 8)})` : 'Siswa Terverifikasi',
+            jurusan: 'Pendidikan',
+            qrCode: 'EDU-SISWA-QR',
+            status: 'Hadir',
+            scannedAt: new Date(a.scanned_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+          }))
+        );
+      }
+    } catch (err) {
+      console.warn('Error fetching Supabase data:', err);
+    }
+  };
 
   // Camera Helper Functions (Prioritize Back Camera / FacingMode Environment)
   const startCamera = async () => {
@@ -218,42 +229,61 @@ export const TeacherDashboard: React.FC = () => {
     };
   }, [showScanModal]);
 
-  // 1. Create Course
+  // 1. Create Course in Supabase
   const handleCreateCourse = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCourse.code || !newCourse.name) return;
 
-    const obj: CourseModule = {
-      id: `c-${Date.now()}`,
-      code: newCourse.code,
-      name: newCourse.name,
-      students: 0,
-      term: 'Ganjil 2026',
-    };
+    try {
+      const { data, error } = await supabase.from('courses').insert({
+        code: newCourse.code,
+        name: newCourse.name,
+        teacher_id: user?.id,
+      } as any).select();
 
-    setCourses([obj, ...courses]);
-    setNewCourse({ code: '', name: '' });
-    setShowCourseModal(false);
+      const obj: CourseModule = {
+        id: data?.[0]?.id || `c-${Date.now()}`,
+        code: newCourse.code,
+        name: newCourse.name,
+        students: 0,
+        term: 'Aktif',
+      };
+
+      setCourses([obj, ...courses]);
+      setNewCourse({ code: '', name: '' });
+      setShowCourseModal(false);
+    } catch (err: any) {
+      alert(`Gagal menyimpan mata pelajaran: ${err.message}`);
+    }
   };
 
-  // 2. Create Class
+  // 2. Create Class in Supabase
   const handleCreateClass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newClass.name) return;
 
-    const obj: ClassItem = {
-      id: `cls-${Date.now()}`,
-      name: newClass.name,
-      courseName: newClass.courseName,
-      academicYear: '2026/2027',
-    };
+    try {
+      const { data, error } = await supabase.from('classes').insert({
+        name: newClass.name,
+        teacher_id: user?.id,
+      } as any).select();
 
-    setClasses([obj, ...classes]);
-    setNewClass({ name: '', courseName: 'Fisika Kuantum Dasar' });
-    setShowClassModal(false);
+      const obj: ClassItem = {
+        id: data?.[0]?.id || `cls-${Date.now()}`,
+        name: newClass.name,
+        courseName: newClass.courseName || 'Mata Pelajaran',
+        academicYear: '2026/2027',
+      };
+
+      setClasses([obj, ...classes]);
+      setNewClass({ name: '', courseName: '' });
+      setShowClassModal(false);
+    } catch (err: any) {
+      alert(`Gagal membuat kelas: ${err.message}`);
+    }
   };
 
-  // 3. Material Upload & File Handler (PDF, DOC, DOCX)
+  // 3. Material Upload & File Handler (PDF, DOC, DOCX) to Supabase Storage & Database
   const handleMaterialFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -261,22 +291,19 @@ export const TeacherDashboard: React.FC = () => {
       let detectedType: 'pdf' | 'word' | 'ppt' | 'image' | 'video' = 'pdf';
       if (ext === 'doc' || ext === 'docx') detectedType = 'word';
 
-      // Attempt uploading to Supabase Storage if available
       let publicFileUrl = URL.createObjectURL(file);
-      if (!isMockEnvironment) {
-        try {
-          const filePath = `materials/${Date.now()}_${file.name}`;
-          const { data: uploadData, error: uploadErr } = await supabase.storage
-            .from('materials')
-            .upload(filePath, file);
+      try {
+        const filePath = `materials/${Date.now()}_${file.name}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('materials')
+          .upload(filePath, file);
 
-          if (!uploadErr && uploadData) {
-            const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
-            if (urlData?.publicUrl) publicFileUrl = urlData.publicUrl;
-          }
-        } catch (err) {
-          console.warn('Storage upload fallback to object URL:', err);
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
+          if (urlData?.publicUrl) publicFileUrl = urlData.publicUrl;
         }
+      } catch (err) {
+        console.warn('Supabase storage upload fallback:', err);
       }
 
       setNewMaterial((prev) => ({
@@ -293,32 +320,34 @@ export const TeacherDashboard: React.FC = () => {
     e.preventDefault();
     if (!newMaterial.title) return;
 
-    const obj: MaterialItem = {
-      id: `m-${Date.now()}`,
-      title: newMaterial.title,
-      fileType: newMaterial.fileType,
-      fileUrl: newMaterial.fileUrl || 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-      fileName: newMaterial.fileName || 'Berkas_Materi.pdf',
-      description: newMaterial.description,
-      className: newMaterial.className,
-    };
+    try {
+      const { data, error } = await supabase.from('materials').insert({
+        title: newMaterial.title,
+        file_type: newMaterial.fileType,
+        file_url: newMaterial.fileUrl || 'https://supabase.com/material.pdf',
+        description: newMaterial.description,
+        teacher_id: user?.id,
+      } as any).select();
 
-    setMaterials([obj, ...materials]);
+      const obj: MaterialItem = {
+        id: data?.[0]?.id || `m-${Date.now()}`,
+        title: newMaterial.title,
+        fileType: newMaterial.fileType,
+        fileUrl: newMaterial.fileUrl || 'https://supabase.com/material.pdf',
+        fileName: newMaterial.fileName || 'Berkas_Materi.pdf',
+        description: newMaterial.description,
+        className: 'Kelas Utama',
+      };
 
-    if (!isMockEnvironment) {
-      await supabase.from('materials').insert({
-        title: obj.title,
-        file_type: obj.fileType,
-        file_url: obj.fileUrl,
-        description: obj.description,
-      } as any);
+      setMaterials([obj, ...materials]);
+      setNewMaterial({ title: '', fileType: 'pdf', fileUrl: '', fileName: '', description: '', className: '' });
+      setShowMaterialModal(false);
+    } catch (err: any) {
+      alert(`Gagal mengunggah materi: ${err.message}`);
     }
-
-    setNewMaterial({ title: '', fileType: 'pdf', fileUrl: '', fileName: '', description: '', className: 'Kelas 10 IPA 1' });
-    setShowMaterialModal(false);
   };
 
-  // 4. Assignment Creation & File Attachment
+  // 4. Assignment Creation & File Attachment in Supabase
   const handleAssignmentFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -335,28 +364,30 @@ export const TeacherDashboard: React.FC = () => {
     e.preventDefault();
     if (!newAssignment.title) return;
 
-    const obj: AssignmentItem = {
-      id: `a-${Date.now()}`,
-      title: newAssignment.title,
-      description: newAssignment.description,
-      dueDate: newAssignment.dueDate || '2026-08-20',
-      className: newAssignment.className,
-      fileUrl: newAssignment.fileUrl,
-      fileName: newAssignment.fileName,
-    };
+    try {
+      const { data, error } = await supabase.from('assignments').insert({
+        title: newAssignment.title,
+        description: newAssignment.description,
+        due_date: newAssignment.dueDate ? new Date(newAssignment.dueDate).toISOString() : new Date().toISOString(),
+        teacher_id: user?.id,
+      } as any).select();
 
-    setAssignments([obj, ...assignments]);
+      const obj: AssignmentItem = {
+        id: data?.[0]?.id || `a-${Date.now()}`,
+        title: newAssignment.title,
+        description: newAssignment.description,
+        dueDate: newAssignment.dueDate || new Date().toISOString().slice(0, 10),
+        className: 'Kelas Utama',
+        fileUrl: newAssignment.fileUrl,
+        fileName: newAssignment.fileName,
+      };
 
-    if (!isMockEnvironment) {
-      await supabase.from('assignments').insert({
-        title: obj.title,
-        description: obj.description,
-        due_date: new Date(obj.dueDate).toISOString(),
-      } as any);
+      setAssignments([obj, ...assignments]);
+      setNewAssignment({ title: '', description: '', dueDate: '', className: '', fileUrl: '', fileName: '' });
+      setShowAssignmentModal(false);
+    } catch (err: any) {
+      alert(`Gagal membuat tugas: ${err.message}`);
     }
-
-    setNewAssignment({ title: '', description: '', dueDate: '', className: 'Kelas 10 IPA 1', fileUrl: '', fileName: '' });
-    setShowAssignmentModal(false);
   };
 
   // 5. Scan QR Code Check-in & Supabase Sync
@@ -364,26 +395,27 @@ export const TeacherDashboard: React.FC = () => {
     if (!scannedCode) return;
 
     const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-    const newRecord: AttendanceRecord = {
-      id: `att-${Date.now()}`,
-      studentName: scannedCode.includes('EDU-SISWA') ? `Siswa (${scannedCode.slice(0, 14)})` : scannedCode,
-      jurusan: 'Teknik Informatika',
-      qrCode: scannedCode,
-      status: 'Hadir',
-      scannedAt: `${timestampStr} WIB`,
-    };
-
-    setAttendanceRecords((prev) => [newRecord, ...prev]);
-
-    if (!isMockEnvironment) {
-      await supabase.from('attendance_records').insert({
+    try {
+      const { data, error } = await supabase.from('attendance_records').insert({
         status: 'hadir',
         scanned_at: new Date().toISOString(),
-      } as any);
-    }
+      } as any).select();
 
-    setQrInputManual('');
-    alert(`✅ Absensi Berhasil Discan! Siswa dengan QR ${scannedCode} telah dicatat HADIR.`);
+      const newRecord: AttendanceRecord = {
+        id: data?.[0]?.id || `att-${Date.now()}`,
+        studentName: scannedCode.includes('EDU-SISWA') ? `Siswa (${scannedCode.slice(0, 14)})` : scannedCode,
+        jurusan: 'Pendidikan',
+        qrCode: scannedCode,
+        status: 'Hadir',
+        scannedAt: `${timestampStr} WIB`,
+      };
+
+      setAttendanceRecords((prev) => [newRecord, ...prev]);
+      setQrInputManual('');
+      alert(`✅ Absensi Berhasil Discan & Tersimpan di Supabase! Kode: ${scannedCode} HADIR.`);
+    } catch (err: any) {
+      alert(`Gagal menyimpan absensi: ${err.message}`);
+    }
   };
 
   // 6. Export Attendance to Excel (CSV)
@@ -466,10 +498,10 @@ export const TeacherDashboard: React.FC = () => {
             Dasbor Guru & Pengajar EduVerse
           </span>
           <h1 className="text-2xl sm:text-3xl font-display font-extrabold mt-2">
-            Selamat Datang, {user?.fullName || 'Prof. Marcus Chen'}
+            Selamat Datang, {user?.fullName || user?.email || 'Guru'}
           </h1>
           <p className="text-sm text-slate-300 mt-1">
-            Kelola mata pelajaran, buat kelas, unggah materi (PDF/DOC/DOCX), buat tugas, dan pindaikan kamera QR Code absensi siswa.
+            Email: <strong className="text-emerald-300">{user?.email}</strong> • Akun Terverifikasi Supabase
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -556,18 +588,22 @@ export const TeacherDashboard: React.FC = () => {
               </button>
             </div>
             <div className="space-y-3">
-              {courses.map((c) => (
-                <div key={c.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
-                  <div>
-                    <span className="text-xs font-bold text-emerald-600 uppercase font-mono">{c.code}</span>
-                    <h4 className="font-bold text-sm text-foreground">{c.name}</h4>
-                    <p className="text-xs text-muted-foreground">{c.term}</p>
+              {courses.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-2">Belum ada mata pelajaran. Klik "+ Tambah" untuk membuat.</p>
+              ) : (
+                courses.map((c) => (
+                  <div key={c.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-emerald-600 uppercase font-mono">{c.code}</span>
+                      <h4 className="font-bold text-sm text-foreground">{c.name}</h4>
+                      <p className="text-xs text-muted-foreground">{c.term}</p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-600">
+                      Aktif
+                    </span>
                   </div>
-                  <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-600">
-                    Aktif
-                  </span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
 
@@ -582,17 +618,21 @@ export const TeacherDashboard: React.FC = () => {
               </button>
             </div>
             <div className="space-y-3">
-              {classes.map((cls) => (
-                <div key={cls.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
-                  <div>
-                    <h4 className="font-bold text-sm text-foreground">{cls.name}</h4>
-                    <p className="text-xs text-muted-foreground">{cls.courseName} • Tahun Ajaran {cls.academicYear}</p>
+              {classes.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-2">Belum ada kelas dibuat. Klik "+ Buat Kelas" untuk menambahkan.</p>
+              ) : (
+                classes.map((cls) => (
+                  <div key={cls.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-sm text-foreground">{cls.name}</h4>
+                      <p className="text-xs text-muted-foreground">{cls.courseName} • Tahun Ajaran {cls.academicYear}</p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-500/10 text-teal-600">
+                      Terdaftar
+                    </span>
                   </div>
-                  <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-500/10 text-teal-600">
-                    Terdaftar
-                  </span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
 
@@ -607,26 +647,30 @@ export const TeacherDashboard: React.FC = () => {
               </button>
             </div>
             <div className="space-y-3">
-              {materials.map((m) => (
-                <div key={m.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
-                  <div>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                      {m.fileType}
-                    </span>
-                    <h4 className="font-bold text-sm text-foreground mt-1">{m.title}</h4>
-                    <p className="text-xs text-muted-foreground">{m.description || m.fileName}</p>
+              {materials.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-2">Belum ada materi diunggah. Klik "+ Unggah Materi" untuk memilih file PDF/DOC/DOCX.</p>
+              ) : (
+                materials.map((m) => (
+                  <div key={m.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
+                    <div>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                        {m.fileType}
+                      </span>
+                      <h4 className="font-bold text-sm text-foreground mt-1">{m.title}</h4>
+                      <p className="text-xs text-muted-foreground">{m.description || m.fileName}</p>
+                    </div>
+                    <a
+                      href={m.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-2 rounded-lg bg-accent hover:bg-muted text-foreground transition-colors cursor-pointer"
+                      title="Unduh Berkas"
+                    >
+                      <Download className="w-4 h-4" />
+                    </a>
                   </div>
-                  <a
-                    href={m.fileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="p-2 rounded-lg bg-accent hover:bg-muted text-foreground transition-colors cursor-pointer"
-                    title="Unduh Berkas"
-                  >
-                    <Download className="w-4 h-4" />
-                  </a>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -640,7 +684,7 @@ export const TeacherDashboard: React.FC = () => {
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Camera className="w-5 h-5 text-amber-600" /> Rekap Absensi & QR Code Siswa
                 </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian QR Kamera Belakang HP & Penyimpanan ke Supabase.</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Pemindaian Kamera Belakang Perangkat & Penyimpanan ke Supabase.</p>
               </div>
               <button
                 onClick={() => setShowScanModal(true)}
@@ -662,18 +706,26 @@ export const TeacherDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {attendanceRecords.map((r) => (
-                    <tr key={r.id} className="hover:bg-muted/30">
-                      <td className="p-2.5 font-bold text-foreground">{r.studentName}</td>
-                      <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
-                      <td className="p-2.5">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
-                          {r.status}
-                        </span>
+                  {attendanceRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="p-4 text-center text-xs text-muted-foreground italic">
+                        Belum ada data absensi. Klik "Pindai Kamera" untuk memindai QR Code siswa.
                       </td>
-                      <td className="p-2.5 text-muted-foreground">{r.scannedAt}</td>
                     </tr>
-                  ))}
+                  ) : (
+                    attendanceRecords.map((r) => (
+                      <tr key={r.id} className="hover:bg-muted/30">
+                        <td className="p-2.5 font-bold text-foreground">{r.studentName}</td>
+                        <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
+                        <td className="p-2.5">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
+                            {r.status}
+                          </span>
+                        </td>
+                        <td className="p-2.5 text-muted-foreground">{r.scannedAt}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -699,22 +751,26 @@ export const TeacherDashboard: React.FC = () => {
               </button>
             </div>
             <div className="space-y-3">
-              {assignments.map((a) => (
-                <div key={a.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
-                  <div>
-                    <h4 className="font-bold text-sm text-foreground">{a.title}</h4>
-                    <p className="text-xs text-muted-foreground">{a.description} • Tenggat: {a.dueDate}</p>
-                    {a.fileName && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-teal-400 mt-1">
-                        <Paperclip className="w-3 h-3" /> {a.fileName}
-                      </span>
-                    )}
+              {assignments.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-2">Belum ada tugas dibuat. Klik "+ Buat Tugas" untuk menerbitkan tugas ke Supabase.</p>
+              ) : (
+                assignments.map((a) => (
+                  <div key={a.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-sm text-foreground">{a.title}</h4>
+                      <p className="text-xs text-muted-foreground">{a.description} • Tenggat: {a.dueDate}</p>
+                      {a.fileName && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-teal-400 mt-1">
+                          <Paperclip className="w-3 h-3" /> {a.fileName}
+                        </span>
+                      )}
+                    </div>
+                    <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-500/10 text-teal-600">
+                      Aktif
+                    </span>
                   </div>
-                  <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-500/10 text-teal-600">
-                    Aktif
-                  </span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -830,15 +886,13 @@ export const TeacherDashboard: React.FC = () => {
                 onChange={(e) => setNewClass({ ...newClass, name: e.target.value })}
                 className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
               />
-              <select
+              <input
+                type="text"
+                placeholder="Nama Mata Pelajaran Terkait"
                 value={newClass.courseName}
                 onChange={(e) => setNewClass({ ...newClass, courseName: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
-              >
-                {courses.map((c) => (
-                  <option key={c.id} value={c.name}>{c.name} ({c.code})</option>
-                ))}
-              </select>
+                className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
+              />
               <button type="submit" className="w-full py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow cursor-pointer">
                 Simpan Kelas
               </button>

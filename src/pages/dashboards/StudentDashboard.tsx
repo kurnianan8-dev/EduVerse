@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { isMockEnvironment } from '../../config/env';
 import { QRCodeSVG } from 'qrcode.react';
 
 interface StudentMaterial {
@@ -51,68 +50,82 @@ export const StudentDashboard: React.FC = () => {
   const [submissionNotes, setSubmissionNotes] = useState('');
   const [submissionFileUrl, setSubmissionFileUrl] = useState('');
   const [submissionFileName, setSubmissionFileName] = useState('');
-  const [submittedList, setSubmittedList] = useState<string[]>(['sa2']);
+  const [submittedList, setSubmittedList] = useState<string[]>([]);
 
-  const [materials, setMaterials] = useState<StudentMaterial[]>([
-    { id: 'sm1', title: 'Slide Bab 1 - Dualisme Gelombang & Partikel (PDF)', subject: 'Fisika Kuantum', fileType: 'pdf', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', description: 'Materi pengantar bab 1' },
-    { id: 'sm2', title: 'Modul Praktikum Interferometri Laser (Word)', subject: 'Fisika Kuantum', fileType: 'word', fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', description: 'Panduan eksperimen laboratorium' },
-    { id: 'sm3', title: 'Video Penjelasan Operator Schrödinger', subject: 'Fisika Kuantum', fileType: 'video', fileUrl: 'https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4', description: 'Simulasi grafik fungsi gelombang' },
-  ]);
+  const [materials, setMaterials] = useState<StudentMaterial[]>([]);
+  const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
 
-  const [assignments, setAssignments] = useState<StudentAssignment[]>([
-    { id: 'sa1', title: 'Tugas 1: Laporan Praktikum Dualisme', subject: 'Fisika Kuantum', dueDate: 'Besok, 23.59 WIB', status: 'Belum Dikumpulkan', description: 'Buat laporan ringkas dalam format PDF/DOCX.' },
-    { id: 'sa2', title: 'Tugas 2: Soal Persamaan Diferensial', subject: 'Kalkulus Lanjut', dueDate: '18 Agt 2026', status: 'Sudah Dikumpulkan', description: 'Kerjakan soal 1 sampai 10.' },
-  ]);
+  const studentQrCode = user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '001'}`;
+  const studentJurusan = user?.jurusan || 'Pendidikan';
 
-  const studentQrCode = user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '004'}`;
-  const studentJurusan = user?.jurusan || 'Teknik Informatika';
-
-  // Fetch materials & assignments from Supabase if authenticated
+  // Fetch materials & assignments from Supabase DB
   useEffect(() => {
-    if (isMockEnvironment) return;
-
-    const fetchSupabaseData = async () => {
-      try {
-        const { data: matData } = await supabase.from('materials').select('*');
-        if (matData && matData.length > 0) {
-          setMaterials(
-            matData.map((m: any) => ({
-              id: m.id,
-              title: m.title,
-              subject: 'Fisika Kuantum',
-              fileType: m.file_type || 'pdf',
-              fileUrl: m.file_url,
-              description: m.description || '',
-            }))
-          );
-        }
-
-        const { data: assData } = await supabase.from('assignments').select('*');
-        if (assData && assData.length > 0) {
-          setAssignments(
-            assData.map((a: any) => ({
-              id: a.id,
-              title: a.title,
-              subject: 'Fisika Kuantum',
-              dueDate: a.due_date ? a.due_date.slice(0, 10) : '2026-08-20',
-              status: 'Belum Dikumpulkan',
-              description: a.description || '',
-            }))
-          );
-        }
-      } catch (err) {
-        console.warn('Error fetching student data:', err);
-      }
-    };
-
     fetchSupabaseData();
   }, []);
 
-  const handleSubmissionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const fetchSupabaseData = async () => {
+    try {
+      // 1. Fetch Materials from Supabase
+      const { data: matData } = await supabase.from('materials').select('*').order('created_at', { ascending: false });
+      if (matData) {
+        setMaterials(
+          matData.map((m: any) => ({
+            id: m.id,
+            title: m.title,
+            subject: 'Pelajaran',
+            fileType: m.file_type || 'pdf',
+            fileUrl: m.file_url,
+            description: m.description || '',
+          }))
+        );
+      }
+
+      // 2. Fetch Assignments from Supabase
+      const { data: assData } = await supabase.from('assignments').select('*').order('created_at', { ascending: false });
+      if (assData) {
+        setAssignments(
+          assData.map((a: any) => ({
+            id: a.id,
+            title: a.title,
+            subject: 'Pelajaran',
+            dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
+            status: 'Belum Dikumpulkan',
+            description: a.description || '',
+          }))
+        );
+      }
+
+      // 3. Fetch Submissions submitted by this student
+      if (user?.id) {
+        const { data: subData } = await supabase.from('submissions').select('assignment_id').eq('student_id', user.id);
+        if (subData) {
+          setSubmittedList(subData.map((s: any) => s.assignment_id));
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching student Supabase data:', err);
+    }
+  };
+
+  const handleSubmissionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const fakeUrl = URL.createObjectURL(file);
-      setSubmissionFileUrl(fakeUrl);
+      let publicFileUrl = URL.createObjectURL(file);
+      try {
+        const filePath = `submissions/${Date.now()}_${file.name}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('materials')
+          .upload(filePath, file);
+
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
+          if (urlData?.publicUrl) publicFileUrl = urlData.publicUrl;
+        }
+      } catch (err) {
+        console.warn('Storage upload fallback:', err);
+      }
+
+      setSubmissionFileUrl(publicFileUrl);
       setSubmissionFileName(file.name);
     }
   };
@@ -121,22 +134,23 @@ export const StudentDashboard: React.FC = () => {
     e.preventDefault();
     if (!selectedAssignment) return;
 
-    setSubmittedList((prev) => [...prev, selectedAssignment.id]);
-
-    if (!isMockEnvironment) {
-      await supabase.from('submissions').insert({
-        assignment_id: selectedAssignment.id.startsWith('sa') ? null : selectedAssignment.id,
+    try {
+      const { data, error } = await supabase.from('submissions').insert({
+        assignment_id: selectedAssignment.id,
         student_id: user?.id,
         file_url: submissionFileUrl || 'https://supabase.com/file-jawaban-siswa.pdf',
         notes: submissionNotes,
-      } as any);
-    }
+      } as any).select();
 
-    alert(`✅ Tugas "${selectedAssignment.title}" berhasil dikumpulkan dan tersimpan di Supabase!`);
-    setSelectedAssignment(null);
-    setSubmissionNotes('');
-    setSubmissionFileUrl('');
-    setSubmissionFileName('');
+      setSubmittedList((prev) => [...prev, selectedAssignment.id]);
+      alert(`✅ Tugas "${selectedAssignment.title}" berhasil dikumpulkan dan tersimpan di Supabase!`);
+      setSelectedAssignment(null);
+      setSubmissionNotes('');
+      setSubmissionFileUrl('');
+      setSubmissionFileName('');
+    } catch (err: any) {
+      alert(`Gagal mengirimkan tugas: ${err.message}`);
+    }
   };
 
   return (
@@ -149,14 +163,14 @@ export const StudentDashboard: React.FC = () => {
               Ruang Belajar Siswa EduVerse
             </span>
             <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-400">
-              <Flame className="w-4 h-4 text-orange-500" /> 12 Hari Beruntun Belajar!
+              <Flame className="w-4 h-4 text-orange-500" /> Sesi Belajar Aktif
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-display font-extrabold mt-2">
-            Selamat Datang, {user?.fullName || 'Sophia Taylor'}
+            Selamat Datang, {user?.fullName || user?.email || 'Siswa'}
           </h1>
           <p className="text-sm text-slate-300 mt-1">
-            Jurusan: <strong className="text-amber-300">{studentJurusan}</strong> • QR Code Siswa Aktif
+            Jurusan: <strong className="text-amber-300">{studentJurusan}</strong> • Email: <strong className="text-amber-300">{user?.email}</strong>
           </p>
         </div>
         <button
@@ -197,7 +211,7 @@ export const StudentDashboard: React.FC = () => {
               : 'bg-card text-muted-foreground hover:text-foreground border border-border'
           }`}
         >
-          <FileCheck className="w-4 h-4" /> Tugas & Pengumpulkan
+          <FileCheck className="w-4 h-4" /> Tugas & Pengunjukan
         </button>
       </div>
 
@@ -214,7 +228,7 @@ export const StudentDashboard: React.FC = () => {
               <QRCodeSVG value={studentQrCode} size={220} level="H" includeMargin={true} />
             </div>
             <div className="border-t border-slate-200 pt-3 text-center space-y-1">
-              <p className="font-bold text-lg text-slate-900">{user?.fullName || 'Sophia Taylor'}</p>
+              <p className="font-bold text-lg text-slate-900">{user?.fullName || user?.email || 'Siswa'}</p>
               <p className="text-xs text-slate-600 font-medium">Jurusan: {studentJurusan}</p>
               <span className="inline-block px-3 py-1 rounded-full text-xs font-mono font-bold bg-orange-100 text-orange-700">
                 {studentQrCode}
@@ -230,32 +244,36 @@ export const StudentDashboard: React.FC = () => {
           <h3 className="text-base font-bold text-foreground flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-orange-600" /> Materi Pembelajaran Kelas ({materials.length})
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {materials.map((m) => (
-              <div key={m.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex flex-col justify-between space-y-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-500/10 text-orange-600 border border-orange-500/20">
-                      {m.fileType}
-                    </span>
-                    <span className="text-xs text-muted-foreground">{m.subject}</span>
+          {materials.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic py-4 text-center">Belum ada materi pembelajaran yang diunggah Guru di Supabase.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {materials.map((m) => (
+                <div key={m.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-500/10 text-orange-600 border border-orange-500/20">
+                        {m.fileType}
+                      </span>
+                      <span className="text-xs text-muted-foreground">{m.subject}</span>
+                    </div>
+                    <h4 className="font-bold text-sm text-foreground">{m.title}</h4>
+                    <p className="text-xs text-muted-foreground mt-1">{m.description}</p>
                   </div>
-                  <h4 className="font-bold text-sm text-foreground">{m.title}</h4>
-                  <p className="text-xs text-muted-foreground mt-1">{m.description}</p>
+                  <div className="flex items-center gap-2 pt-2 border-t border-border/40">
+                    <a
+                      href={m.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex-1 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Unduh / Lihat Berkas
+                    </a>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 pt-2 border-t border-border/40">
-                  <a
-                    href={m.fileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex-1 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" /> Unduh / Lihat Berkas
-                  </a>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -263,43 +281,47 @@ export const StudentDashboard: React.FC = () => {
       {activeTab === 'tugas' && (
         <div className="p-6 rounded-2xl bg-card border border-border shadow-sm space-y-4">
           <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-            <FileCheck className="w-5 h-5 text-orange-600" /> Daftar Tugas & Status Pengumpulkan
+            <FileCheck className="w-5 h-5 text-orange-600" /> Daftar Tugas & Status Pengumpulan
           </h3>
-          <div className="space-y-3">
-            {assignments.map((a) => {
-              const isSubmitted = submittedList.includes(a.id);
-              return (
-                <div key={a.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-orange-600">{a.subject}</span>
-                      <span className="text-xs text-muted-foreground">• Batas Waktu: {a.dueDate}</span>
+          {assignments.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic py-4 text-center">Belum ada tugas yang diterbitkan Guru di Supabase.</p>
+          ) : (
+            <div className="space-y-3">
+              {assignments.map((a) => {
+                const isSubmitted = submittedList.includes(a.id);
+                return (
+                  <div key={a.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-orange-600">{a.subject}</span>
+                        <span className="text-xs text-muted-foreground">• Batas Waktu: {a.dueDate}</span>
+                      </div>
+                      <h4 className="font-bold text-sm text-foreground mt-0.5">{a.title}</h4>
+                      <p className="text-xs text-muted-foreground mt-1">{a.description}</p>
                     </div>
-                    <h4 className="font-bold text-sm text-foreground mt-0.5">{a.title}</h4>
-                    <p className="text-xs text-muted-foreground mt-1">{a.description}</p>
+                    <div>
+                      {isSubmitted ? (
+                        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 font-bold text-xs">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Sudah Dikumpulkan
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setSelectedAssignment(a)}
+                          className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" /> Kumpulkan Tugas
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    {isSubmitted ? (
-                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 font-bold text-xs">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Sudah Dikumpulkan
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => setSelectedAssignment(a)}
-                        className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Upload className="w-3.5 h-3.5" /> Kumpulkan Tugas
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Modal: Form Pengumpulkan Tugas dengan Upload Berkas Jawaban */}
+      {/* Modal: Form Pengumpulan Tugas dengan Upload Berkas Jawaban */}
       {selectedAssignment && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">

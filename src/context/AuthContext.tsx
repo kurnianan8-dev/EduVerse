@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { AppRole, Permission, UserProfile, ROLE_PERMISSIONS } from '../types/auth.types';
 import { supabase } from '../lib/supabase';
-import { isMockEnvironment } from '../config/env';
 
 interface AuthContextType {
   user: UserProfile | null;
@@ -9,82 +8,24 @@ interface AuthContextType {
   schoolId: string | undefined;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email?: string, password?: string, mockRole?: AppRole) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   switchRole: (newRole: AppRole) => void;
   hasPermission: (permission: Permission) => boolean;
 }
 
-// Mock User Profiles for Guru & Siswa
-const MOCK_PROFILES: Record<string, UserProfile> = {
-  teacher: {
-    id: 'mock-teacher-003',
-    email: 'teacher@eduverse.io',
-    fullName: 'Prof. Marcus Chen',
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    role: 'guru',
-    schoolId: 'sch-001',
-    schoolName: 'Horizon International Academy',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  guru: {
-    id: 'mock-teacher-003',
-    email: 'teacher@eduverse.io',
-    fullName: 'Prof. Marcus Chen (Guru)',
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    role: 'guru',
-    schoolId: 'sch-001',
-    schoolName: 'Horizon International Academy',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  student: {
-    id: 'mock-student-004',
-    email: 'student@eduverse.io',
-    fullName: 'Sophia Taylor',
-    avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    role: 'siswa',
-    jurusan: 'Teknik Informatika',
-    qrCode: 'EDU-SISWA-MOCK-004',
-    schoolId: 'sch-001',
-    schoolName: 'Horizon International Academy',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  siswa: {
-    id: 'mock-student-004',
-    email: 'student@eduverse.io',
-    fullName: 'Sophia Taylor (Siswa)',
-    avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    role: 'siswa',
-    jurusan: 'Teknik Informatika',
-    qrCode: 'EDU-SISWA-MOCK-004',
-    schoolId: 'sch-001',
-    schoolName: 'Horizon International Academy',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-};
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [activeRole, setActiveRole] = useState<AppRole>('guru');
-  const [user, setUser] = useState<UserProfile | null>(MOCK_PROFILES['guru']);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    if (isMockEnvironment) {
-      setUser(MOCK_PROFILES[activeRole] || MOCK_PROFILES['guru']);
-      return;
-    }
-
-    // Real Supabase session synchronization
-    setIsLoading(true);
+    // Synchronize Supabase Auth Session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        fetchSupabaseProfile(session.user.id);
+        fetchSupabaseProfile(session.user);
       } else {
         setUser(null);
         setIsLoading(false);
@@ -93,7 +34,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
-        await fetchSupabaseProfile(session.user.id);
+        await fetchSupabaseProfile(session.user);
       } else {
         setUser(null);
         setIsLoading(false);
@@ -103,56 +44,64 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       subscription.unsubscribe();
     };
-  }, [activeRole]);
+  }, []);
 
-  const fetchSupabaseProfile = async (userId: string) => {
+  const fetchSupabaseProfile = async (authUser: any) => {
     try {
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', userId)
+        .eq('id', authUser.id)
         .single();
 
-      if (error || !data) {
-        console.warn('Profile fetch warning, fallback to mock profile:', error?.message);
-        setUser(MOCK_PROFILES[activeRole] || MOCK_PROFILES['guru']);
-      } else {
+      if (data) {
         const profileData = data as Record<string, any>;
-        const mappedRole: AppRole = profileData.role === 'teacher' || profileData.role === 'guru' ? 'guru' : 'siswa';
+        const mappedRole: AppRole =
+          profileData.role === 'teacher' || profileData.role === 'guru' ? 'guru' : 'siswa';
         const userProf: UserProfile = {
           id: profileData.id,
-          email: profileData.email,
-          fullName: profileData.full_name,
+          email: profileData.email || authUser.email,
+          fullName: profileData.full_name || authUser.user_metadata?.full_name || authUser.email,
           avatarUrl: profileData.avatar_url || undefined,
           role: mappedRole,
-          jurusan: profileData.jurusan,
-          qrCode: profileData.qr_code,
-          createdAt: profileData.created_at,
-          updatedAt: profileData.updated_at,
+          jurusan: profileData.jurusan || authUser.user_metadata?.jurusan,
+          qrCode: profileData.qr_code || `EDU-SISWA-${authUser.id.slice(0, 8)}`,
+          createdAt: profileData.created_at || new Date().toISOString(),
+          updatedAt: profileData.updated_at || new Date().toISOString(),
+        };
+        setUser(userProf);
+        setActiveRole(mappedRole);
+      } else {
+        // Build UserProfile directly from Auth User Metadata if table row isn't fetched yet
+        const rawRole = authUser.user_metadata?.role;
+        const mappedRole: AppRole = rawRole === 'teacher' || rawRole === 'guru' ? 'guru' : 'siswa';
+        const userProf: UserProfile = {
+          id: authUser.id,
+          email: authUser.email || '',
+          fullName: authUser.user_metadata?.full_name || authUser.email || 'Pengguna EduVerse',
+          role: mappedRole,
+          jurusan: authUser.user_metadata?.jurusan,
+          qrCode: `EDU-SISWA-${authUser.id.slice(0, 8)}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         };
         setUser(userProf);
         setActiveRole(mappedRole);
       }
     } catch (err) {
-      console.error('Error fetching user profile:', err);
+      console.error('Error fetching profile from Supabase:', err);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const login = async (email?: string, password?: string, mockRole?: AppRole) => {
+  const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
-      if (email && password && !isMockEnvironment) {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        if (data.session?.user) {
-          await fetchSupabaseProfile(data.session.user.id);
-        }
-      } else {
-        const targetRole = mockRole || activeRole;
-        setActiveRole(targetRole);
-        setUser(MOCK_PROFILES[targetRole] || MOCK_PROFILES['guru']);
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      if (data.session?.user) {
+        await fetchSupabaseProfile(data.session.user);
       }
     } finally {
       setIsLoading(false);
@@ -162,9 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     setIsLoading(true);
     try {
-      if (!isMockEnvironment) {
-        await supabase.auth.signOut();
-      }
+      await supabase.auth.signOut();
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -173,7 +120,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const switchRole = (newRole: AppRole) => {
     setActiveRole(newRole);
-    setUser(MOCK_PROFILES[newRole] || MOCK_PROFILES['guru']);
+    if (user) {
+      setUser({ ...user, role: newRole });
+    }
   };
 
   const hasPermission = (permission: Permission): boolean => {
