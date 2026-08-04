@@ -59,7 +59,7 @@ export const StudentDashboard: React.FC = () => {
   const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
 
   const studentQrCode = user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '001'}`;
-  const studentJurusan = user?.jurusan || 'Pendidikan';
+  const studentJurusan = user?.jurusan || 'Umum';
 
   // Ensure QR Code exists in Supabase DB for logged in student
   useEffect(() => {

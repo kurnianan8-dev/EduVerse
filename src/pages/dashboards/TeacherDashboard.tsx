@@ -144,6 +144,15 @@ export const TeacherDashboard: React.FC = () => {
 
   const fetchSupabaseData = async () => {
     try {
+      // 0. Fetch all profiles map to join student details
+      const { data: allProfiles } = await supabase.from('profiles').select('*');
+      const profilesMap: Record<string, any> = {};
+      if (allProfiles) {
+        allProfiles.forEach((p: any) => {
+          profilesMap[p.id] = p;
+        });
+      }
+
       // 1. Materials
       const { data: matData } = await supabase.from('materials').select('*').order('created_at', { ascending: false });
       if (matData) {
@@ -174,21 +183,24 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
-      // 3. Submissions
+      // 3. Submissions with Real Student Profiles
       const { data: subData } = await supabase.from('submissions').select('*').order('submitted_at', { ascending: false });
       if (subData) {
         setSubmissions(
-          subData.map((s: any) => ({
-            id: s.id,
-            assignmentId: s.assignment_id,
-            studentId: s.student_id,
-            studentName: s.student_id ? `Siswa (ID: ${s.student_id.slice(0, 8)})` : 'Siswa',
-            fileUrl: s.file_url,
-            notes: s.notes || '',
-            grade: s.grade,
-            feedback: s.feedback || '',
-            submittedAt: new Date(s.submitted_at).toLocaleDateString('id-ID'),
-          }))
+          subData.map((s: any) => {
+            const prof = profilesMap[s.student_id];
+            return {
+              id: s.id,
+              assignmentId: s.assignment_id,
+              studentId: s.student_id,
+              studentName: prof ? (prof.full_name || prof.email) : `Siswa (${s.student_id?.slice(0, 8) || ''})`,
+              fileUrl: s.file_url,
+              notes: s.notes || '',
+              grade: s.grade,
+              feedback: s.feedback || '',
+              submittedAt: new Date(s.submitted_at).toLocaleDateString('id-ID'),
+            };
+          })
         );
       }
 
@@ -206,18 +218,21 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
-      // 5. Attendance Records
+      // 5. Attendance Records with Real Student Profiles
       const { data: attData } = await supabase.from('attendance_records').select('*').order('scanned_at', { ascending: false });
       if (attData) {
         setAttendanceRecords(
-          attData.map((a: any) => ({
-            id: a.id,
-            studentName: a.student_id ? `Siswa (ID: ${a.student_id.slice(0, 8)})` : 'Siswa Terverifikasi',
-            jurusan: 'Pendidikan',
-            qrCode: 'EDU-SISWA-QR',
-            status: 'Hadir',
-            scannedAt: new Date(a.scanned_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-          }))
+          attData.map((a: any) => {
+            const prof = profilesMap[a.student_id];
+            return {
+              id: a.id,
+              studentName: prof ? (prof.full_name || prof.email) : (a.student_id ? `Siswa (${a.student_id.slice(0, 8)})` : 'Siswa'),
+              jurusan: prof?.jurusan || 'Umum',
+              qrCode: prof?.qr_code || a.student_id || '-',
+              status: 'Hadir',
+              scannedAt: new Date(a.scanned_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+            };
+          })
         );
       }
     } catch (err) {
@@ -458,35 +473,62 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // 6. Scan QR Code Check-in & Supabase Sync
+  // 6. Scan QR Code Check-in & Real Supabase Profile Search
   const handleScanQrCode = async (scannedCode: string) => {
-    if (!scannedCode) return;
+    const cleanCode = scannedCode.trim();
+    if (!cleanCode) return;
 
-    const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
     try {
-      const { data, error } = await supabase.from('attendance_records').insert({
+      // 1. Search student profile in Supabase by qr_code or id
+      let { data: studentProfiles } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('qr_code', cleanCode);
+
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data: idProfiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', cleanCode);
+        studentProfiles = idProfiles;
+      }
+
+      if (!studentProfiles || studentProfiles.length === 0) {
+        alert(`❌ Data siswa tidak ditemukan di Supabase database untuk Kode QR: "${cleanCode}".`);
+        return;
+      }
+
+      const student = studentProfiles[0];
+      const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+      // 2. Insert attendance record into Supabase
+      const { data, error } = await (supabase as any).from('attendance_records').insert({
+        student_id: student.id,
         status: 'hadir',
         scanned_at: new Date().toISOString(),
-      } as any).select();
+      }).select();
 
+      if (error) throw error;
+
+      // 3. Update attendance state with REAL student profile data
       const newRecord: AttendanceRecord = {
         id: (data as any)?.[0]?.id || `att-${Date.now()}`,
-        studentName: scannedCode.includes('EDU-SISWA') ? `Siswa (${scannedCode.slice(0, 14)})` : scannedCode,
-        jurusan: 'Pendidikan',
-        qrCode: scannedCode,
+        studentName: student.full_name || student.email,
+        jurusan: student.jurusan || 'Umum',
+        qrCode: student.qr_code || student.id,
         status: 'Hadir',
         scannedAt: `${timestampStr} WIB`,
       };
 
       setAttendanceRecords((prev) => [newRecord, ...prev]);
       setQrInputManual('');
-      alert(`✅ Absensi Berhasil Discan & Tersimpan di Supabase! Kode: ${scannedCode} HADIR.`);
+      alert(`✅ Absensi Berhasil! Siswa "${student.full_name || student.email}" (${student.jurusan || 'Umum'}) dicatat HADIR.`);
     } catch (err: any) {
       alert(`Gagal menyimpan absensi: ${err.message}`);
     }
   };
 
-  // 7. Export Attendance to Excel (CSV)
+  // 7. Export Attendance to Excel (CSV) using Real Database Fields
   const handleExportExcel = () => {
     const csvContent =
       'data:text/csv;charset=utf-8,' +
@@ -503,7 +545,7 @@ export const TeacherDashboard: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  // 8. Export Attendance to PDF
+  // 8. Export Attendance to PDF using Real Database Fields
   const handleExportPDF = () => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
@@ -768,6 +810,7 @@ export const TeacherDashboard: React.FC = () => {
                 <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
                   <tr>
                     <th className="p-2.5">Siswa</th>
+                    <th className="p-2.5">Jurusan</th>
                     <th className="p-2.5">Kode QR</th>
                     <th className="p-2.5">Status</th>
                     <th className="p-2.5">Waktu</th>
@@ -776,7 +819,7 @@ export const TeacherDashboard: React.FC = () => {
                 <tbody className="divide-y divide-border">
                   {attendanceRecords.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="p-4 text-center text-xs text-muted-foreground italic">
+                      <td colSpan={5} className="p-4 text-center text-xs text-muted-foreground italic">
                         Belum ada data absensi. Klik "Pindai Kamera" untuk memindai QR Code siswa.
                       </td>
                     </tr>
@@ -784,6 +827,7 @@ export const TeacherDashboard: React.FC = () => {
                     attendanceRecords.map((r) => (
                       <tr key={r.id} className="hover:bg-muted/30">
                         <td className="p-2.5 font-bold text-foreground">{r.studentName}</td>
+                        <td className="p-2.5 text-muted-foreground">{r.jurusan}</td>
                         <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
                         <td className="p-2.5">
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
@@ -966,14 +1010,18 @@ export const TeacherDashboard: React.FC = () => {
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="Contoh: EDU-SISWA-001"
+                  placeholder="Masukkan Kode QR Siswa (contoh: EDU-SISWA-...)"
                   value={qrInputManual}
                   onChange={(e) => setQrInputManual(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
                 />
                 <button
                   onClick={() => {
-                    handleScanQrCode(qrInputManual || 'EDU-SISWA-SCAN-001');
+                    if (!qrInputManual) {
+                      alert('Silakan masukkan Kode QR atau ID Siswa.');
+                      return;
+                    }
+                    handleScanQrCode(qrInputManual);
                     setShowScanModal(false);
                   }}
                   className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs cursor-pointer"
