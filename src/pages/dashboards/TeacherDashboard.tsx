@@ -89,6 +89,7 @@ export const TeacherDashboard: React.FC = () => {
 
   // Scanner References & States
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const isScanningRef = useRef<boolean>(false);
   const lastScannedCodeRef = useRef<string>('');
   const lastScannedTimeRef = useRef<number>(0);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -242,64 +243,109 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Real-Time Continuous Automatic QR Scanner Loop (Html5Qrcode)
+  // Robust Camera QR Scanner Lifecycle (Ensures DOM Readiness, Clean Release, & Auto Rear-Camera Selection)
   useEffect(() => {
+    let isMounted = true;
+    let animFrameId: number;
+    let timerId: ReturnType<typeof setTimeout>;
+
+    const safeCleanupScanner = async () => {
+      if (scannerRef.current) {
+        try {
+          if (isScanningRef.current) {
+            await scannerRef.current.stop();
+            isScanningRef.current = false;
+          }
+          scannerRef.current.clear();
+        } catch (e) {
+          console.warn('Scanner cleanup error (handled):', e);
+        }
+        scannerRef.current = null;
+      }
+    };
+
     if (showScanModal) {
       setCameraError(null);
       setScanFeedback(null);
 
-      const html5QrCode = new Html5Qrcode("reader");
-      scannerRef.current = html5QrCode;
+      // Wait for DOM element <div id="reader"> to be fully mounted with dimensions via requestAnimationFrame + setTimeout
+      animFrameId = requestAnimationFrame(() => {
+        timerId = setTimeout(async () => {
+          if (!isMounted) return;
 
-      const onScanSuccess = async (decodedText: string) => {
-        const now = Date.now();
-        // Cooldown: Ignore duplicate scans of the exact same QR code within 3.5 seconds
-        if (lastScannedCodeRef.current === decodedText && now - lastScannedTimeRef.current < 3500) {
-          return;
-        }
+          const readerElem = document.getElementById('reader');
+          if (!readerElem) {
+            if (isMounted) setCameraError('Wadah kamera tidak ditemukan di layar.');
+            return;
+          }
 
-        lastScannedCodeRef.current = decodedText;
-        lastScannedTimeRef.current = now;
+          // Clean any previous scanner instance before creating a new one
+          await safeCleanupScanner();
 
-        await processAutoScan(decodedText);
-      };
+          try {
+            const html5QrCode = new Html5Qrcode('reader');
+            scannerRef.current = html5QrCode;
 
-      const config = { fps: 10, qrbox: { width: 220, height: 220 } };
-
-      // Priority 1: Back camera facingMode environment for mobile devices
-      html5QrCode
-        .start({ facingMode: "environment" }, config, onScanSuccess, () => {})
-        .catch(() => {
-          // Priority 2: Fallback to available camera device list
-          Html5Qrcode.getCameras()
-            .then((devices) => {
-              if (devices && devices.length > 0) {
-                const backCam =
-                  devices.find(
-                    (d) =>
-                      d.label.toLowerCase().includes('back') ||
-                      d.label.toLowerCase().includes('rear') ||
-                      d.label.toLowerCase().includes('environment')
-                  ) || devices[0];
-
-                html5QrCode.start(backCam.id, config, onScanSuccess, () => {}).catch(() => {
-                  setCameraError('Kamera tidak dapat diakses atau izin ditolak.');
-                });
-              } else {
-                setCameraError('Kamera tidak ditemukan pada perangkat.');
+            const onScanSuccess = async (decodedText: string) => {
+              const now = Date.now();
+              // Cooldown: Ignore duplicate scans of the exact same QR code within 3.5 seconds
+              if (lastScannedCodeRef.current === decodedText && now - lastScannedTimeRef.current < 3500) {
+                return;
               }
-            })
-            .catch(() => {
-              setCameraError('Kamera tidak dapat diakses.');
-            });
-        });
 
-      return () => {
-        if (scannerRef.current && scannerRef.current.isScanning) {
-          scannerRef.current.stop().catch(() => {});
-        }
-      };
+              lastScannedCodeRef.current = decodedText;
+              lastScannedTimeRef.current = now;
+
+              await processAutoScan(decodedText);
+            };
+
+            const config = { fps: 10, qrbox: { width: 220, height: 220 }, aspectRatio: 1.0 };
+
+            // Query available cameras to explicitly pick the rear/back camera deviceId on Android/iOS
+            let cameraIdOrConfig: any = { facingMode: 'environment' };
+            try {
+              const devices = await Html5Qrcode.getCameras();
+              if (devices && devices.length > 0) {
+                const backCam = devices.find(
+                  (d) =>
+                    d.label.toLowerCase().includes('back') ||
+                    d.label.toLowerCase().includes('rear') ||
+                    d.label.toLowerCase().includes('environment') ||
+                    d.label.toLowerCase().includes('belakang')
+                );
+                if (backCam) {
+                  cameraIdOrConfig = backCam.id;
+                } else {
+                  cameraIdOrConfig = devices[0].id;
+                }
+              }
+            } catch (cameraErr) {
+              console.warn('getCameras fallback to environment constraint:', cameraErr);
+            }
+
+            if (!isMounted) return;
+
+            // Start scanner cleanly
+            await html5QrCode.start(cameraIdOrConfig, config, onScanSuccess, () => {});
+            isScanningRef.current = true;
+          } catch (err: any) {
+            console.error('Html5Qrcode start error:', err);
+            if (isMounted) {
+              setCameraError(
+                `Kamera gagal dibuka: ${err?.message || 'Izin kamera ditolak atau kamera sedang digunakan oleh aplikasi lain'}`
+              );
+            }
+          }
+        }, 150);
+      });
     }
+
+    return () => {
+      isMounted = false;
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      if (timerId) clearTimeout(timerId);
+      safeCleanupScanner();
+    };
   }, [showScanModal]);
 
   // Automatic Scan Processing & Supabase Insertion (Camera Stays Active!)
@@ -1023,9 +1069,9 @@ export const TeacherDashboard: React.FC = () => {
               </button>
             </div>
 
-            {/* Html5Qrcode Realtime Scanner Container */}
-            <div className="relative rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 aspect-square flex items-center justify-center">
-              <div id="reader" className="w-full h-full object-cover"></div>
+            {/* Html5Qrcode Realtime Scanner Container with explicit min height to guarantee DOM dimensions */}
+            <div className="relative rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 min-h-[260px] aspect-square flex items-center justify-center">
+              <div id="reader" className="w-full h-full min-h-[260px] object-cover"></div>
             </div>
 
             {/* Toast Feedback Notification Banner */}
@@ -1047,7 +1093,7 @@ export const TeacherDashboard: React.FC = () => {
             )}
 
             {cameraError && (
-              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-2">
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-2 text-left">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 <span>{cameraError}</span>
               </div>
