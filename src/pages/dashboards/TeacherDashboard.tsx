@@ -354,18 +354,59 @@ export const TeacherDashboard: React.FC = () => {
     if (!cleanCode) return;
 
     try {
-      // 1. Search student profile in Supabase by qr_code or id
+      // Strip common prefixes to obtain raw UUID / ID fragment
+      const rawIdFragment = cleanCode.replace(/^EDU-SISWA-/i, '').trim();
+
+      // 1. Search student profile in Supabase profiles database
+      // Strategy A: Exact match on qr_code column
       let { data: studentProfiles } = await supabase
         .from('profiles')
         .select('*')
         .eq('qr_code', cleanCode);
 
+      // Strategy B: Exact match on id column (UUID)
       if (!studentProfiles || studentProfiles.length === 0) {
         const { data: idProfiles } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', cleanCode);
         studentProfiles = idProfiles;
+      }
+
+      // Strategy C: Match exact rawIdFragment on id column
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data: rawIdProfiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', rawIdFragment);
+        studentProfiles = rawIdProfiles;
+      }
+
+      // Strategy D: Prefix match on id column (e.g. UUID starting with 7d9734bc)
+      if ((!studentProfiles || studentProfiles.length === 0) && rawIdFragment.length >= 4) {
+        const { data: idPrefixProfiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('id', `${rawIdFragment}%`);
+        studentProfiles = idPrefixProfiles;
+      }
+
+      // Strategy E: Partial match on qr_code column
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data: qrPartialProfiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('qr_code', `%${rawIdFragment}%`);
+        studentProfiles = qrPartialProfiles;
+      }
+
+      // Strategy F: Match by email if scanned string is an email
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data: emailProfiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('email', cleanCode);
+        studentProfiles = emailProfiles;
       }
 
       if (!studentProfiles || studentProfiles.length === 0) {
@@ -389,6 +430,14 @@ export const TeacherDashboard: React.FC = () => {
       }).select();
 
       if (error) throw error;
+
+      // 3. Auto sync missing qr_code to public.profiles table
+      if (!student.qr_code) {
+        await (supabase as any)
+          .from('profiles')
+          .update({ qr_code: cleanCode })
+          .eq('id', student.id);
+      }
 
       // 3. Update attendance state with REAL student profile data
       const newRecord: AttendanceRecord = {

@@ -73,6 +73,8 @@ export const StudentRegister: React.FC = () => {
         if (authErr) throw authErr;
 
         if (authData.user) {
+          const userQrCode = data.role === 'siswa' ? `EDU-SISWA-${authData.user.id.slice(0, 8)}` : undefined;
+
           // 2. Insert/Upsert into public.profiles table
           await supabase.from('profiles').upsert({
             id: authData.user.id,
@@ -80,18 +82,18 @@ export const StudentRegister: React.FC = () => {
             full_name: data.fullName,
             role: data.role === 'guru' ? 'teacher' : 'student',
             jurusan: data.role === 'siswa' ? data.fieldInfo : undefined,
-            qr_code: generatedQrCode,
+            qr_code: userQrCode,
           } as any);
+
+          setRegistrationSuccess({
+            role: data.role,
+            fullName: data.fullName,
+            fieldInfo: data.fieldInfo,
+            qrCode: userQrCode,
+            email: data.email,
+          });
         }
       }
-
-      setRegistrationSuccess({
-        role: data.role,
-        fullName: data.fullName,
-        fieldInfo: data.fieldInfo,
-        qrCode: generatedQrCode,
-        email: data.email,
-      });
     } catch (err: any) {
       alert(`Gagal mendaftar: ${err.message || 'Terjadi kesalahan'}`);
     } finally {
