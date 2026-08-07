@@ -548,7 +548,7 @@ export const TeacherDashboard: React.FC = () => {
 
       // 5. Update local attendance state with REAL student profile data
       const newRecord: AttendanceRecord = {
-        id: (data as any)?.[0]?.id || `att-${Date.now()}`,
+        id: insertedId,
         studentName: studentName,
         jurusan: student.jurusan || 'Umum',
         qrCode: student.qr_code || jsonCodeParam || cleanCode,
