@@ -94,6 +94,7 @@ export const TeacherDashboard: React.FC = () => {
   const lastScannedTimeRef = useRef<number>(0);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [attendanceMode, setAttendanceMode] = useState<'masuk' | 'pulang'>('masuk');
 
   // Main Data States (Fetched directly from Supabase DB)
   const [courses, setCourses] = useState<CourseModule[]>([]);
@@ -354,84 +355,131 @@ export const TeacherDashboard: React.FC = () => {
     if (!cleanCode) return;
 
     try {
-      // Strip common prefixes to obtain raw UUID / ID fragment
-      const rawIdFragment = cleanCode.replace(/^EDU-SISWA-/i, '').trim();
+      let extractedUUID = '';
+      let isJsonFormat = false;
 
-      // 1. Search student profile in Supabase profiles database
-      // Strategy A: Exact match on qr_code column
-      let { data: studentProfiles } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('qr_code', cleanCode);
-
-      // Strategy B: Exact match on id column (UUID)
-      if (!studentProfiles || studentProfiles.length === 0) {
-        const { data: idProfiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', cleanCode);
-        studentProfiles = idProfiles;
+      // 1. Structural Damage & Format Validation
+      try {
+        const parsed = JSON.parse(cleanCode);
+        if (parsed && typeof parsed === 'object') {
+          isJsonFormat = true;
+          extractedUUID = parsed.sid || parsed.studentId || parsed.id || '';
+        }
+      } catch {
+        // Plain string format
       }
 
-      // Strategy C: Match exact rawIdFragment on id column
-      if (!studentProfiles || studentProfiles.length === 0) {
-        const { data: rawIdProfiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', rawIdFragment);
-        studentProfiles = rawIdProfiles;
-      }
-
-      // Strategy D: Prefix match on id column (e.g. UUID starting with 7d9734bc)
-      if ((!studentProfiles || studentProfiles.length === 0) && rawIdFragment.length >= 4) {
-        const { data: idPrefixProfiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .ilike('id', `${rawIdFragment}%`);
-        studentProfiles = idPrefixProfiles;
-      }
-
-      // Strategy E: Partial match on qr_code column
-      if (!studentProfiles || studentProfiles.length === 0) {
-        const { data: qrPartialProfiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .ilike('qr_code', `%${rawIdFragment}%`);
-        studentProfiles = qrPartialProfiles;
-      }
-
-      // Strategy F: Match by email if scanned string is an email
-      if (!studentProfiles || studentProfiles.length === 0) {
-        const { data: emailProfiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('email', cleanCode);
-        studentProfiles = emailProfiles;
-      }
-
-      if (!studentProfiles || studentProfiles.length === 0) {
+      if (cleanCode.startsWith('{') && !isJsonFormat) {
         setScanFeedback({
           type: 'error',
-          message: 'QR Code tidak terdaftar.',
+          message: '⚠️ QR Code rusak atau format data tidak dapat dibaca.',
         });
         setTimeout(() => setScanFeedback(null), 3500);
         return;
       }
 
-      const student: any = (studentProfiles as any[])[0];
+      if (!extractedUUID) {
+        extractedUUID = cleanCode.replace(/^EDU-SISWA-/i, '').trim();
+      }
+
+      // 2. Multi-Strategy Search in Supabase public.profiles Database
+      let studentProfiles: any[] | null = null;
+
+      // Strategy A: Search by extracted UUID
+      if (extractedUUID) {
+        const { data } = await supabase.from('profiles').select('*').eq('id', extractedUUID);
+        if (data && data.length > 0) studentProfiles = data;
+      }
+
+      // Strategy B: Search by exact qr_code column
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data } = await supabase.from('profiles').select('*').eq('qr_code', cleanCode);
+        if (data && data.length > 0) studentProfiles = data;
+      }
+
+      // Strategy C: Search by ILIKE id prefix
+      if ((!studentProfiles || studentProfiles.length === 0) && extractedUUID.length >= 4) {
+        const { data } = await supabase.from('profiles').select('*').ilike('id', `${extractedUUID}%`);
+        if (data && data.length > 0) studentProfiles = data;
+      }
+
+      // Strategy D: Search by ILIKE qr_code partial
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data } = await supabase.from('profiles').select('*').ilike('qr_code', `%${extractedUUID}%`);
+        if (data && data.length > 0) studentProfiles = data;
+      }
+
+      // Strategy E: Search by email
+      if (!studentProfiles || studentProfiles.length === 0) {
+        const { data } = await supabase.from('profiles').select('*').eq('email', cleanCode);
+        if (data && data.length > 0) studentProfiles = data;
+      }
+
+      // Validation 1: QR Tidak Terdaftar
+      if (!studentProfiles || studentProfiles.length === 0) {
+        setScanFeedback({
+          type: 'error',
+          message: '❌ QR Code tidak terdaftar di database sekolah.',
+        });
+        setTimeout(() => setScanFeedback(null), 3500);
+        return;
+      }
+
+      const student: any = studentProfiles[0];
       const studentName = student.full_name || student.email || 'Siswa';
+      const role = (student.role || '').toLowerCase();
+
+      // Validation 2: Role Verification (Siswa Only)
+      if (role !== 'student' && role !== 'siswa') {
+        setScanFeedback({
+          type: 'error',
+          message: `⚠️ Presensi Ditolak: Akun "${studentName}" terdaftar sebagai ${student.role === 'teacher' ? 'Guru' : 'Bukan Siswa'}.`,
+        });
+        setTimeout(() => setScanFeedback(null), 4000);
+        return;
+      }
+
+      // Validation 3: Same-Day Duplicate Attendance Check
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const { data: existingToday } = await supabase
+        .from('attendance_records')
+        .select('*')
+        .eq('student_id', student.id)
+        .gte('scanned_at', startOfDay.toISOString());
+
+      if (existingToday && existingToday.length > 0) {
+        const sameModeRecord = existingToday.find((r: any) =>
+          r.session_id === attendanceMode ||
+          (attendanceMode === 'masuk' && r.status === 'hadir') ||
+          (attendanceMode === 'pulang' && r.status === 'pulang')
+        );
+
+        if (sameModeRecord) {
+          const scanTime = new Date((sameModeRecord as any).scanned_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+          setScanFeedback({
+            type: 'error',
+            message: `⚠️ ${studentName} sudah presensi ${attendanceMode === 'pulang' ? 'PULANG' : 'MASUK'} hari ini (${scanTime} WIB).`,
+          });
+          setTimeout(() => setScanFeedback(null), 4000);
+          return;
+        }
+      }
+
       const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
-      // 2. Insert attendance record into Supabase
+      // 3. Insert Attendance Record into Supabase
       const { data, error } = await (supabase as any).from('attendance_records').insert({
         student_id: student.id,
-        status: 'hadir',
+        session_id: attendanceMode,
+        status: attendanceMode === 'pulang' ? 'pulang' : 'hadir',
         scanned_at: new Date().toISOString(),
       }).select();
 
       if (error) throw error;
 
-      // 3. Auto sync missing qr_code to public.profiles table
+      // 4. Auto sync missing qr_code in public.profiles table
       if (!student.qr_code) {
         await (supabase as any)
           .from('profiles')
@@ -439,22 +487,22 @@ export const TeacherDashboard: React.FC = () => {
           .eq('id', student.id);
       }
 
-      // 3. Update attendance state with REAL student profile data
+      // 5. Update local attendance state with REAL student profile data
       const newRecord: AttendanceRecord = {
         id: (data as any)?.[0]?.id || `att-${Date.now()}`,
         studentName: studentName,
         jurusan: student.jurusan || 'Umum',
-        qrCode: student.qr_code || student.id,
-        status: 'Hadir',
+        qrCode: student.qr_code || cleanCode,
+        status: attendanceMode === 'pulang' ? 'Sakit' : 'Hadir', // Using existing UI status badge mapping
         scannedAt: `${timestampStr} WIB`,
       };
 
       setAttendanceRecords((prev) => [newRecord, ...prev]);
 
-      // 4. Display Toast Feedback (Camera stays open so teacher can scan next student!)
+      // 6. Display Toast Feedback (Camera stays active!)
       setScanFeedback({
         type: 'success',
-        message: `Absensi berhasil: ${studentName}`,
+        message: `✅ Absensi ${attendanceMode === 'pulang' ? 'PULANG' : 'MASUK'} Berhasil: ${studentName} (${student.jurusan || 'Umum'})`,
       });
 
       setTimeout(() => setScanFeedback(null), 3500);
@@ -1115,6 +1163,32 @@ export const TeacherDashboard: React.FC = () => {
               </div>
               <button onClick={() => setShowScanModal(false)} className="text-muted-foreground hover:text-foreground cursor-pointer">
                 <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Mode Presensi Switcher: Sesi Masuk vs Sesi Pulang */}
+            <div className="flex items-center justify-center gap-2 p-1 rounded-xl bg-muted/60 border border-border">
+              <button
+                type="button"
+                onClick={() => setAttendanceMode('masuk')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  attendanceMode === 'masuk'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                ☀️ Sesi Masuk
+              </button>
+              <button
+                type="button"
+                onClick={() => setAttendanceMode('pulang')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  attendanceMode === 'pulang'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                🌙 Sesi Pulang
               </button>
             </div>
 

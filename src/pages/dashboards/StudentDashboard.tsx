@@ -289,7 +289,19 @@ export const StudentDashboard: React.FC = () => {
 
           <div className="p-6 rounded-2xl bg-white text-slate-900 space-y-3 shadow-xl inline-block w-full border border-slate-200">
             <div className="flex justify-center py-2">
-              <QRCodeSVG id="student-qr-svg" value={studentQrCode} size={220} level="H" includeMargin={true} />
+              <QRCodeSVG
+                id="student-qr-svg"
+                value={JSON.stringify({
+                  app: 'EDUVERSE',
+                  type: 'STUDENT_ATTENDANCE_QR',
+                  v: '1.0',
+                  sid: user?.id || '',
+                  code: studentQrCode,
+                })}
+                size={220}
+                level="H"
+                includeMargin={true}
+              />
             </div>
             <div className="border-t border-slate-200 pt-3 text-center space-y-1">
               <p className="font-bold text-lg text-slate-900">{user?.fullName || user?.email || 'Siswa'}</p>
