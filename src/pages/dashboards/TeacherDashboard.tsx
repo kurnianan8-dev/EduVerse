@@ -354,8 +354,11 @@ export const TeacherDashboard: React.FC = () => {
     const cleanCode = scannedCode.trim();
     if (!cleanCode) return;
 
+    console.log('🔍 [QR Scan Raw Input] Scanned Value:', cleanCode);
+
     try {
       let extractedUUID = '';
+      let jsonCodeParam = '';
       let isJsonFormat = false;
 
       // 1. Structural Damage & Format Validation
@@ -364,12 +367,15 @@ export const TeacherDashboard: React.FC = () => {
         if (parsed && typeof parsed === 'object') {
           isJsonFormat = true;
           extractedUUID = parsed.sid || parsed.studentId || parsed.id || '';
+          jsonCodeParam = parsed.code || '';
+          console.log('🔍 [QR Scan Parsed JSON Payload] sid/UUID:', extractedUUID, 'codeParam:', jsonCodeParam);
         }
       } catch {
         // Plain string format
       }
 
       if (cleanCode.startsWith('{') && !isJsonFormat) {
+        console.error('❌ [QR Scan Error] Invalid structural JSON format');
         setScanFeedback({
           type: 'error',
           message: '⚠️ QR Code rusak atau format data tidak dapat dibaca.',
@@ -382,41 +388,57 @@ export const TeacherDashboard: React.FC = () => {
         extractedUUID = cleanCode.replace(/^EDU-SISWA-/i, '').trim();
       }
 
+      console.log('🔍 [QR Scan Processing] Final extractedUUID:', extractedUUID);
+
       // 2. Multi-Strategy Search in Supabase public.profiles Database
       let studentProfiles: any[] | null = null;
 
-      // Strategy A: Search by extracted UUID
+      // Strategy A: Search by extracted UUID (Exact ID match)
       if (extractedUUID) {
-        const { data } = await supabase.from('profiles').select('*').eq('id', extractedUUID);
+        console.log('🔍 [Supabase Query Strategy A] eq("id", extractedUUID):', extractedUUID);
+        const { data, error } = await supabase.from('profiles').select('*').eq('id', extractedUUID);
+        if (error) console.warn('Strategy A query warning:', error.message);
         if (data && data.length > 0) studentProfiles = data;
       }
 
-      // Strategy B: Search by exact qr_code column
+      // Strategy B: Search by jsonCodeParam or cleanCode on qr_code column
       if (!studentProfiles || studentProfiles.length === 0) {
-        const { data } = await supabase.from('profiles').select('*').eq('qr_code', cleanCode);
+        const targetQr = jsonCodeParam || cleanCode;
+        console.log('🔍 [Supabase Query Strategy B] eq("qr_code", targetQr):', targetQr);
+        const { data, error } = await supabase.from('profiles').select('*').eq('qr_code', targetQr);
+        if (error) console.warn('Strategy B query warning:', error.message);
         if (data && data.length > 0) studentProfiles = data;
       }
 
-      // Strategy C: Search by ILIKE id prefix
+      // Strategy C: Search by ILIKE id prefix (UUID fragment e.g., 7d9734bc)
       if ((!studentProfiles || studentProfiles.length === 0) && extractedUUID.length >= 4) {
-        const { data } = await supabase.from('profiles').select('*').ilike('id', `${extractedUUID}%`);
+        console.log('🔍 [Supabase Query Strategy C] ilike("id", extractedUUID%):', `${extractedUUID}%`);
+        const { data, error } = await supabase.from('profiles').select('*').ilike('id', `${extractedUUID}%`);
+        if (error) console.warn('Strategy C query warning:', error.message);
         if (data && data.length > 0) studentProfiles = data;
       }
 
       // Strategy D: Search by ILIKE qr_code partial
       if (!studentProfiles || studentProfiles.length === 0) {
-        const { data } = await supabase.from('profiles').select('*').ilike('qr_code', `%${extractedUUID}%`);
+        console.log('🔍 [Supabase Query Strategy D] ilike("qr_code", %extractedUUID%):', `%${extractedUUID}%`);
+        const { data, error } = await supabase.from('profiles').select('*').ilike('qr_code', `%${extractedUUID}%`);
+        if (error) console.warn('Strategy D query warning:', error.message);
         if (data && data.length > 0) studentProfiles = data;
       }
 
       // Strategy E: Search by email
       if (!studentProfiles || studentProfiles.length === 0) {
-        const { data } = await supabase.from('profiles').select('*').eq('email', cleanCode);
+        console.log('🔍 [Supabase Query Strategy E] eq("email", cleanCode):', cleanCode);
+        const { data, error } = await supabase.from('profiles').select('*').eq('email', cleanCode);
+        if (error) console.warn('Strategy E query warning:', error.message);
         if (data && data.length > 0) studentProfiles = data;
       }
 
+      console.log('🔍 [Supabase Query Result] Profiles Matched:', studentProfiles?.length, studentProfiles);
+
       // Validation 1: QR Tidak Terdaftar
       if (!studentProfiles || studentProfiles.length === 0) {
+        console.error('❌ [QR Validation Failed] Student profile not found in Supabase DB for code:', cleanCode);
         setScanFeedback({
           type: 'error',
           message: '❌ QR Code tidak terdaftar di database sekolah.',
@@ -429,8 +451,18 @@ export const TeacherDashboard: React.FC = () => {
       const studentName = student.full_name || student.email || 'Siswa';
       const role = (student.role || '').toLowerCase();
 
+      console.log('✅ [QR Validation Success] Found Student Profile:', {
+        id: student.id,
+        name: studentName,
+        email: student.email,
+        role: student.role,
+        jurusan: student.jurusan,
+        qr_code: student.qr_code,
+      });
+
       // Validation 2: Role Verification (Siswa Only)
       if (role !== 'student' && role !== 'siswa') {
+        console.warn('⚠️ [QR Validation Warning] Invalid Role:', student.role);
         setScanFeedback({
           type: 'error',
           message: `⚠️ Presensi Ditolak: Akun "${studentName}" terdaftar sebagai ${student.role === 'teacher' ? 'Guru' : 'Bukan Siswa'}.`,
@@ -458,6 +490,7 @@ export const TeacherDashboard: React.FC = () => {
 
         if (sameModeRecord) {
           const scanTime = new Date((sameModeRecord as any).scanned_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+          console.warn('⚠️ [QR Validation Warning] Duplicate attendance today for:', studentName);
           setScanFeedback({
             type: 'error',
             message: `⚠️ ${studentName} sudah presensi ${attendanceMode === 'pulang' ? 'PULANG' : 'MASUK'} hari ini (${scanTime} WIB).`,
@@ -470,6 +503,7 @@ export const TeacherDashboard: React.FC = () => {
       const timestampStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
       // 3. Insert Attendance Record into Supabase
+      console.log('📌 [Supabase Insert] Inserting attendance_records for student_id:', student.id);
       const { data, error } = await (supabase as any).from('attendance_records').insert({
         student_id: student.id,
         session_id: attendanceMode,
@@ -477,13 +511,20 @@ export const TeacherDashboard: React.FC = () => {
         scanned_at: new Date().toISOString(),
       }).select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ [Supabase Insert Error]', error.message);
+        throw error;
+      }
+
+      console.log('✅ [Supabase Insert Success] Recorded attendance row:', data);
 
       // 4. Auto sync missing qr_code in public.profiles table
       if (!student.qr_code) {
+        const syncQrValue = jsonCodeParam || cleanCode || `EDU-SISWA-${student.id.slice(0, 8)}`;
+        console.log('📌 [Supabase Sync] Syncing qr_code column in profiles table to:', syncQrValue);
         await (supabase as any)
           .from('profiles')
-          .update({ qr_code: cleanCode })
+          .update({ qr_code: syncQrValue })
           .eq('id', student.id);
       }
 
@@ -492,8 +533,8 @@ export const TeacherDashboard: React.FC = () => {
         id: (data as any)?.[0]?.id || `att-${Date.now()}`,
         studentName: studentName,
         jurusan: student.jurusan || 'Umum',
-        qrCode: student.qr_code || cleanCode,
-        status: attendanceMode === 'pulang' ? 'Sakit' : 'Hadir', // Using existing UI status badge mapping
+        qrCode: student.qr_code || jsonCodeParam || cleanCode,
+        status: attendanceMode === 'pulang' ? 'Sakit' : 'Hadir',
         scannedAt: `${timestampStr} WIB`,
       };
 
@@ -507,6 +548,7 @@ export const TeacherDashboard: React.FC = () => {
 
       setTimeout(() => setScanFeedback(null), 3500);
     } catch (err: any) {
+      console.error('❌ [ProcessAutoScan Exception]', err);
       setScanFeedback({
         type: 'error',
         message: `Gagal menyimpan absensi: ${err.message}`,

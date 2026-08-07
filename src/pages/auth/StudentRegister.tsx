@@ -58,6 +58,7 @@ export const StudentRegister: React.FC = () => {
 
       if (!isMockEnvironment) {
         // 1. Sign up in Supabase Auth
+        const userQrCodePending = data.role === 'siswa' ? `EDU-SISWA-PENDING` : undefined;
         const { data: authData, error: authErr } = await supabase.auth.signUp({
           email: data.email,
           password: data.password,
@@ -66,6 +67,7 @@ export const StudentRegister: React.FC = () => {
               full_name: data.fullName,
               role: data.role === 'guru' ? 'teacher' : 'student',
               jurusan: data.role === 'siswa' ? data.fieldInfo : undefined,
+              qr_code: userQrCodePending,
             },
           },
         });
@@ -74,9 +76,10 @@ export const StudentRegister: React.FC = () => {
 
         if (authData.user) {
           const userQrCode = data.role === 'siswa' ? `EDU-SISWA-${authData.user.id.slice(0, 8)}` : undefined;
+          console.log('📌 [Registration] Generated Student QR Code:', userQrCode, 'User ID:', authData.user.id);
 
           // 2. Insert/Upsert into public.profiles table
-          await supabase.from('profiles').upsert({
+          const { error: upsertErr } = await supabase.from('profiles').upsert({
             id: authData.user.id,
             email: data.email,
             full_name: data.fullName,
@@ -84,6 +87,12 @@ export const StudentRegister: React.FC = () => {
             jurusan: data.role === 'siswa' ? data.fieldInfo : undefined,
             qr_code: userQrCode,
           } as any);
+
+          if (upsertErr) {
+            console.warn('⚠️ [Registration] Profiles upsert warning:', upsertErr.message);
+          } else {
+            console.log('✅ [Registration] Saved profile & QR Code to Supabase profiles DB! Value:', userQrCode);
+          }
 
           setRegistrationSuccess({
             role: data.role,

@@ -71,13 +71,15 @@ export const StudentDashboard: React.FC = () => {
   const ensureStudentQrCodeInSupabase = async () => {
     if (!user?.id) return;
     try {
+      const generatedQr = `EDU-SISWA-${user.id.slice(0, 8)}`;
       const { data: profile } = await supabase.from('profiles').select('qr_code').eq('id', user.id).single();
+      console.log('📌 [StudentDashboard] Checking profiles.qr_code in DB:', (profile as any)?.qr_code);
       if (!(profile as any)?.qr_code) {
-        const generatedQr = `EDU-SISWA-${user.id.slice(0, 8)}`;
+        console.log('📌 [StudentDashboard] Syncing missing profiles.qr_code in DB to:', generatedQr);
         await (supabase as any).from('profiles').update({ qr_code: generatedQr }).eq('id', user.id);
       }
     } catch (err) {
-      console.warn('Syncing QR Code to Supabase profile:', err);
+      console.warn('⚠️ [StudentDashboard] Syncing QR Code to Supabase profile:', err);
     }
   };
 
