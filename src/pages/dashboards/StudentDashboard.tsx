@@ -299,6 +299,9 @@ export const StudentDashboard: React.FC = () => {
                   v: '1.0',
                   sid: user?.id || '',
                   code: studentQrCode,
+                  name: user?.fullName || '',
+                  email: user?.email || '',
+                  jurusan: studentJurusan,
                 })}
                 size={220}
                 level="H"

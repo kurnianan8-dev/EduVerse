@@ -224,16 +224,31 @@ export const TeacherDashboard: React.FC = () => {
 
       // 5. Attendance Records with Real Student Profiles
       const { data: attData } = await supabase.from('attendance_records').select('*').order('scanned_at', { ascending: false });
-      if (attData) {
+      if (attData && attData.length > 0) {
+        // Query any missing student profiles by student_id list
+        const missingIds = attData.map((a: any) => a.student_id).filter((id: string) => id && !profilesMap[id]);
+        if (missingIds.length > 0) {
+          const { data: addProfiles } = await supabase.from('profiles').select('*').in('id', missingIds);
+          if (addProfiles) {
+            addProfiles.forEach((p: any) => {
+              profilesMap[p.id] = p;
+            });
+          }
+        }
+
         setAttendanceRecords(
           attData.map((a: any) => {
             const prof = profilesMap[a.student_id];
+            let studentName = prof?.full_name || prof?.email;
+            if (!studentName || studentName.startsWith('Siswa (')) {
+              studentName = prof?.full_name || prof?.email || (a.qr_code && !a.qr_code.startsWith('{') ? a.qr_code : 'Siswa');
+            }
             return {
               id: a.id,
-              studentName: prof ? (prof.full_name || prof.email) : (a.student_id ? `Siswa (${a.student_id.slice(0, 8)})` : 'Siswa'),
+              studentName: studentName,
               jurusan: prof?.jurusan || 'Umum',
               qrCode: prof?.qr_code || a.student_id || '-',
-              status: 'Hadir',
+              status: a.status === 'pulang' ? 'Sakit' : 'Hadir',
               scannedAt: new Date(a.scanned_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
             };
           })
@@ -359,6 +374,9 @@ export const TeacherDashboard: React.FC = () => {
     try {
       let extractedUUID = '';
       let jsonCodeParam = '';
+      let jsonName = '';
+      let jsonEmail = '';
+      let jsonJurusan = '';
       let isJsonFormat = false;
 
       // 1. Structural Damage & Format Validation
@@ -368,7 +386,10 @@ export const TeacherDashboard: React.FC = () => {
           isJsonFormat = true;
           extractedUUID = parsed.sid || parsed.studentId || parsed.id || '';
           jsonCodeParam = parsed.code || '';
-          console.log('🔍 [QR Scan Parsed JSON Payload] sid/UUID:', extractedUUID, 'codeParam:', jsonCodeParam);
+          jsonName = parsed.name || '';
+          jsonEmail = parsed.email || '';
+          jsonJurusan = parsed.jurusan || '';
+          console.log('🔍 [QR Scan Parsed JSON Payload] sid:', extractedUUID, 'name:', jsonName, 'email:', jsonEmail);
         }
       } catch {
         // Plain string format
@@ -436,13 +457,14 @@ export const TeacherDashboard: React.FC = () => {
 
       // Strategy F: Resilient fallback parsing for valid UUID student payload
       if ((!studentProfiles || studentProfiles.length === 0) && extractedUUID && extractedUUID.length >= 8) {
-        console.log('📌 [Resilient Fallback] Constructing profile from scanned UUID payload:', extractedUUID);
+        const fallbackName = jsonName || (jsonEmail ? jsonEmail.split('@')[0] : '') || `Siswa`;
+        console.log('📌 [Resilient Fallback] Constructing profile from scanned UUID payload:', extractedUUID, 'Name:', fallbackName);
         studentProfiles = [{
           id: extractedUUID,
-          email: `siswa_${extractedUUID.slice(0, 8)}@eduverse.school`,
-          full_name: `Siswa (${extractedUUID.slice(0, 8)})`,
+          email: jsonEmail || `siswa_${extractedUUID.slice(0, 8)}@eduverse.school`,
+          full_name: fallbackName,
           role: 'student',
-          jurusan: 'Teknik',
+          jurusan: jsonJurusan || 'Umum',
           qr_code: jsonCodeParam || cleanCode || `EDU-SISWA-${extractedUUID.slice(0, 8)}`,
         }];
       }
