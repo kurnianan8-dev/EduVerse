@@ -521,6 +521,10 @@ export const TeacherDashboard: React.FC = () => {
       try {
         const { data, error } = await (supabase as any).from('attendance_records').insert({
           student_id: student.id,
+          profile_id: student.id,
+          qr_code: student.qr_code || jsonCodeParam || cleanCode,
+          attendance_type: 'qr',
+          session: attendanceMode,
           session_id: attendanceMode,
           status: attendanceMode === 'pulang' ? 'pulang' : 'hadir',
           scanned_at: new Date().toISOString(),

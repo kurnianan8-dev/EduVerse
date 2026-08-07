@@ -328,24 +328,48 @@ export interface Database {
       attendance_records: {
         Row: {
           id: string;
-          session_id: string | null;
           student_id: string | null;
+          profile_id: string | null;
+          school_id: string | null;
+          class_id: string | null;
+          qr_code: string | null;
+          attendance_type: string;
+          session: string;
+          session_id: string | null;
           status: string;
           scanned_at: string;
+          created_at: string;
+          updated_at: string;
         };
         Insert: {
           id?: string;
-          session_id?: string | null;
           student_id?: string | null;
+          profile_id?: string | null;
+          school_id?: string | null;
+          class_id?: string | null;
+          qr_code?: string | null;
+          attendance_type?: string;
+          session?: string;
+          session_id?: string | null;
           status?: string;
           scanned_at?: string;
+          created_at?: string;
+          updated_at?: string;
         };
         Update: {
           id?: string;
-          session_id?: string | null;
           student_id?: string | null;
+          profile_id?: string | null;
+          school_id?: string | null;
+          class_id?: string | null;
+          qr_code?: string | null;
+          attendance_type?: string;
+          session?: string;
+          session_id?: string | null;
           status?: string;
           scanned_at?: string;
+          created_at?: string;
+          updated_at?: string;
         };
       };
     };
