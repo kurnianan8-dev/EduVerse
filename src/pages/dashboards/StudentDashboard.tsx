@@ -23,6 +23,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { QRCodeSVG } from 'qrcode.react';
+import { UserAvatar } from '../../components/common/UserAvatar';
 
 interface StudentMaterial {
   id: string;
@@ -308,12 +309,15 @@ export const StudentDashboard: React.FC = () => {
                 includeMargin={true}
               />
             </div>
-            <div className="border-t border-slate-200 pt-3 text-center space-y-1">
-              <p className="font-bold text-lg text-slate-900">{user?.fullName || user?.email || 'Siswa'}</p>
-              <p className="text-xs text-slate-600 font-medium">Jurusan: {studentJurusan}</p>
-              <span className="inline-block px-3 py-1 rounded-full text-xs font-mono font-bold bg-orange-100 text-orange-700">
-                {studentQrCode}
-              </span>
+            <div className="border-t border-slate-200 pt-3 flex items-center justify-center gap-3 text-left">
+              <UserAvatar src={user?.avatarUrl} name={user?.fullName} size="md" />
+              <div>
+                <p className="font-bold text-base text-slate-900">{user?.fullName || user?.email || 'Siswa'}</p>
+                <p className="text-xs text-slate-600 font-medium">Jurusan: {studentJurusan}</p>
+                <span className="inline-block px-2.5 py-0.5 mt-1 rounded-full text-[11px] font-mono font-bold bg-orange-100 text-orange-700">
+                  {studentQrCode}
+                </span>
+              </div>
             </div>
           </div>
 

@@ -26,6 +26,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { Html5Qrcode } from 'html5-qrcode';
+import { UserAvatar } from '../../components/common/UserAvatar';
 
 interface CourseModule {
   id: string;
@@ -67,6 +68,7 @@ interface SubmissionItem {
   assignmentId: string;
   studentId: string;
   studentName: string;
+  avatarUrl?: string;
   fileUrl: string;
   notes: string;
   grade?: number;
@@ -77,6 +79,7 @@ interface SubmissionItem {
 interface AttendanceRecord {
   id: string;
   studentName: string;
+  avatarUrl?: string;
   jurusan: string;
   qrCode: string;
   status: 'Hadir' | 'Izin' | 'Sakit' | 'Alpa';
@@ -246,6 +249,7 @@ export const TeacherDashboard: React.FC = () => {
             return {
               id: a.id,
               studentName: studentName,
+              avatarUrl: prof?.avatar_url || undefined,
               jurusan: prof?.jurusan || 'Umum',
               qrCode: prof?.qr_code || a.student_id || '-',
               status: a.status === 'pulang' ? 'Sakit' : 'Hadir',
@@ -1088,7 +1092,10 @@ export const TeacherDashboard: React.FC = () => {
                   ) : (
                     attendanceRecords.map((r) => (
                       <tr key={r.id} className="hover:bg-muted/30">
-                        <td className="p-2.5 font-bold text-foreground">{r.studentName}</td>
+                        <td className="p-2.5 flex items-center gap-2 font-bold text-foreground">
+                          <UserAvatar src={r.avatarUrl} name={r.studentName} size="sm" />
+                          <span>{r.studentName}</span>
+                        </td>
                         <td className="p-2.5 text-muted-foreground">{r.jurusan}</td>
                         <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
                         <td className="p-2.5">

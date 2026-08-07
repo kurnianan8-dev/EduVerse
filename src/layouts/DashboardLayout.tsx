@@ -24,6 +24,8 @@ import {
   User,
 } from 'lucide-react';
 
+import { UserAvatar } from '../components/common/UserAvatar';
+
 interface NavItem {
   label: string;
   href: string;
@@ -124,11 +126,7 @@ export const DashboardLayout: React.FC = () => {
         {/* User Quick Info & Footer */}
         <div className="p-4 border-t border-sidebar-border bg-sidebar-accent/30">
           <div className="flex items-center gap-3">
-            <img
-              src={user?.avatarUrl}
-              alt={user?.fullName}
-              className="w-10 h-10 rounded-full object-cover border-2 border-blue-500/30"
-            />
+            <UserAvatar src={user?.avatarUrl} name={user?.fullName} size="md" className="border-2 border-blue-500/30" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-white truncate">{user?.fullName}</p>
               <p className="text-xs text-slate-400 truncate">{user?.email}</p>
@@ -173,11 +171,7 @@ export const DashboardLayout: React.FC = () => {
                 onClick={() => setUserDropdownOpen(!userDropdownOpen)}
                 className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-accent transition-colors"
               >
-                <img
-                  src={user?.avatarUrl}
-                  alt={user?.fullName}
-                  className="w-8 h-8 rounded-full object-cover border border-border"
-                />
+                <UserAvatar src={user?.avatarUrl} name={user?.fullName} size="sm" />
                 <span className="hidden sm:inline text-xs font-semibold text-foreground">
                   {user?.fullName}
                 </span>

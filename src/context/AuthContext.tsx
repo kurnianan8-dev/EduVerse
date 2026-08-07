@@ -12,6 +12,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   switchRole: (newRole: AppRole) => void;
   hasPermission: (permission: Permission) => boolean;
+  updateUserAvatar: (avatarUrl: string | undefined) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -20,6 +21,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [activeRole, setActiveRole] = useState<AppRole>('guru');
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  const updateUserAvatar = (avatarUrl: string | undefined) => {
+    if (user) {
+      setUser({
+        ...user,
+        avatarUrl,
+      });
+    }
+  };
 
   useEffect(() => {
     // Synchronize Supabase Auth Session
@@ -142,6 +152,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         switchRole,
         hasPermission,
+        updateUserAvatar,
       }}
     >
       {children}
