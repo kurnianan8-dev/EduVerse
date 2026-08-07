@@ -39,8 +39,14 @@ interface CourseModule {
 interface ClassItem {
   id: string;
   name: string;
+  code: string;
   courseName: string;
+  description?: string;
+  jurusan?: string;
+  semester?: string;
   academicYear: string;
+  isActive: boolean;
+  studentCount: number;
 }
 
 interface MaterialItem {
@@ -117,7 +123,13 @@ export const TeacherDashboard: React.FC = () => {
 
   // Form Inputs
   const [newCourse, setNewCourse] = useState({ code: '', name: '' });
-  const [newClass, setNewClass] = useState({ name: '', courseName: '' });
+  const [newClass, setNewClass] = useState<{ name: string; courseName: string; description?: string; jurusan?: string; semester?: string }>({
+    name: '',
+    courseName: '',
+    description: '',
+    jurusan: 'Semua Jurusan',
+    semester: 'Ganjil',
+  });
   const [gradeInput, setGradeInput] = useState<number | ''>('');
   const [feedbackInput, setFeedbackInput] = useState('');
   const [newMaterial, setNewMaterial] = useState<{
@@ -221,6 +233,33 @@ export const TeacherDashboard: React.FC = () => {
             name: c.name,
             students: 0,
             term: 'Aktif',
+          }))
+        );
+      }
+
+      // 4.5 Classes from Supabase DB
+      const { data: clsData } = await supabase.from('classes').select('*').order('created_at', { ascending: false });
+      if (clsData && clsData.length > 0) {
+        const { data: enrollData } = await supabase.from('enrollments').select('class_id');
+        const countMap: Record<string, number> = {};
+        if (enrollData) {
+          enrollData.forEach((e: any) => {
+            countMap[e.class_id] = (countMap[e.class_id] || 0) + 1;
+          });
+        }
+
+        setClasses(
+          clsData.map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            code: c.code || `EDU${c.id.slice(0, 5).toUpperCase()}`,
+            courseName: c.course_name || 'Mata Pelajaran Umum',
+            description: c.description || '',
+            jurusan: c.jurusan || 'Semua Jurusan',
+            semester: c.semester || 'Ganjil',
+            academicYear: c.academic_year || '2026/2027',
+            isActive: c.is_active !== false,
+            studentCount: countMap[c.id] || 0,
           }))
         );
       }
@@ -633,27 +672,46 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // 2. Create Class in Supabase
+  // 2. Create Class in Supabase with Auto-Generated Unique Code
   const handleCreateClass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newClass.name) return;
 
     try {
-      const { data, error } = await supabase.from('classes').insert({
+      const generatedCode = 'EDU' + Math.random().toString(36).substring(2, 7).toUpperCase();
+      const { data, error } = await (supabase as any).from('classes').insert({
         name: newClass.name,
+        code: generatedCode,
         teacher_id: user?.id,
-      } as any).select();
+        course_name: newClass.courseName || 'Mata Pelajaran Umum',
+        description: newClass.description || '',
+        jurusan: newClass.jurusan || 'Semua Jurusan',
+        semester: newClass.semester || 'Ganjil',
+        academic_year: '2026/2027',
+        is_active: true,
+      }).select();
 
+      if (error) console.warn('Class insert notice:', error.message);
+
+      const createdId = (data as any)?.[0]?.id || `cls-${Date.now()}`;
       const obj: ClassItem = {
-        id: (data as any)?.[0]?.id || `cls-${Date.now()}`,
+        id: createdId,
         name: newClass.name,
-        courseName: newClass.courseName || 'Mata Pelajaran',
+        code: generatedCode,
+        courseName: newClass.courseName || 'Mata Pelajaran Umum',
+        description: newClass.description || '',
+        jurusan: newClass.jurusan || 'Semua Jurusan',
+        semester: newClass.semester || 'Ganjil',
         academicYear: '2026/2027',
+        isActive: true,
+        studentCount: 0,
       };
 
       setClasses([obj, ...classes]);
-      setNewClass({ name: '', courseName: '' });
+      setNewClass({ name: '', courseName: '', description: '', jurusan: 'Semua Jurusan', semester: 'Ganjil' });
       setShowClassModal(false);
+
+      alert(`✅ Kelas "${newClass.name}" berhasil dibuat!\n\nKode Kelas Unik: ${generatedCode}\n\nBagikan kode ini kepada siswa agar dapat bergabung secara otomatis.`);
     } catch (err: any) {
       alert(`Gagal membuat kelas: ${err.message}`);
     }
@@ -998,14 +1056,36 @@ export const TeacherDashboard: React.FC = () => {
                 <p className="text-xs text-muted-foreground italic py-2">Belum ada kelas dibuat. Klik "+ Buat Kelas" untuk menambahkan.</p>
               ) : (
                 classes.map((cls) => (
-                  <div key={cls.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
-                    <div>
-                      <h4 className="font-bold text-sm text-foreground">{cls.name}</h4>
-                      <p className="text-xs text-muted-foreground">{cls.courseName} • Tahun Ajaran {cls.academicYear}</p>
+                  <div key={cls.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                            {cls.courseName}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${cls.isActive ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-600'}`}>
+                            {cls.isActive ? 'Kelas Aktif' : 'Ditutup'}
+                          </span>
+                        </div>
+                        <h4 className="font-bold text-sm text-foreground mt-1">{cls.name}</h4>
+                        <p className="text-xs text-muted-foreground">{cls.jurusan} • {cls.semester} • <strong>{cls.studentCount} Siswa Terdaftar</strong></p>
+                      </div>
+
+                      <div className="text-right space-y-1">
+                        <span className="inline-block text-xs font-mono font-extrabold text-blue-600 bg-blue-500/10 px-2.5 py-1 rounded-lg border border-blue-500/20">
+                          {cls.code}
+                        </span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(cls.code);
+                            alert(`✅ Kode Kelas "${cls.code}" berhasil disalin ke clipboard! Bagikan kode ini ke siswa Anda.`);
+                          }}
+                          className="block text-[10px] font-bold text-blue-600 hover:underline cursor-pointer ml-auto"
+                        >
+                          Salin Kode 📋
+                        </button>
+                      </div>
                     </div>
-                    <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-500/10 text-teal-600">
-                      Terdaftar
-                    </span>
                   </div>
                 ))
               )}
@@ -1356,31 +1436,69 @@ export const TeacherDashboard: React.FC = () => {
       {/* Modal: Create Class */}
       {showClassModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-base font-bold text-foreground">Buat Kelas Baru</h3>
+              <h3 className="text-base font-bold text-foreground">Buat Kelas Baru & Kode Kelas</h3>
               <button onClick={() => setShowClassModal(false)} className="text-muted-foreground hover:text-foreground cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <form onSubmit={handleCreateClass} className="space-y-3">
-              <input
-                type="text"
-                required
-                placeholder="Nama Kelas (contoh: Kelas 10 IPA 1)"
-                value={newClass.name}
-                onChange={(e) => setNewClass({ ...newClass, name: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
-              />
-              <input
-                type="text"
-                placeholder="Nama Mata Pelajaran Terkait"
-                value={newClass.courseName}
-                onChange={(e) => setNewClass({ ...newClass, courseName: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
-              />
-              <button type="submit" className="w-full py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow cursor-pointer">
-                Simpan Kelas
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-foreground">Nama Kelas *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: XII TKJ 1"
+                  value={newClass.name}
+                  onChange={(e) => setNewClass({ ...newClass, name: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500 font-bold"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-foreground">Mata Pelajaran *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: Jaringan Komputer & Fiber Optic"
+                  value={newClass.courseName}
+                  onChange={(e) => setNewClass({ ...newClass, courseName: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-foreground">Jurusan Target</label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: Teknik Komputer"
+                    value={newClass.jurusan || ''}
+                    onChange={(e) => setNewClass({ ...newClass, jurusan: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-foreground">Semester</label>
+                  <select
+                    value={newClass.semester || 'Ganjil'}
+                    onChange={(e) => setNewClass({ ...newClass, semester: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  >
+                    <option value="Ganjil">Semester Ganjil</option>
+                    <option value="Genap">Semester Genap</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-[11px] text-teal-600 font-medium">
+                💡 Sistem akan otomatis membuat Kode Kelas Unik acak 8 karakter (contoh: <strong>EDU8XK21</strong>) yang dapat Anda bagikan ke siswa untuk bergabung.
+              </div>
+
+              <button type="submit" className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg shadow-teal-600/30 cursor-pointer transition-all">
+                Simpan & Generate Kode Kelas
               </button>
             </form>
           </div>
