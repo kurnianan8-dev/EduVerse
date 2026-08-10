@@ -658,12 +658,28 @@ export const TeacherDashboard: React.FC = () => {
       const generatedCode = 'EDU' + Math.random().toString(36).substring(2, 7).toUpperCase();
       console.log('📌 [Teacher Class Create Request]:', { name: newClass.name, generatedCode, teacher_id: user?.id });
 
-      // Primary Insert Strategy: Full payload with code & name embedding
+      // Fetch active school_id and course_id from DB if available
+      let schoolId = '2fb69c98-48c0-4473-80b7-79bbf7ba5fc2';
+      let courseId = '370d99bd-23ed-4104-b531-32541f62ebd1';
+
+      try {
+        const { data: schData } = await (supabase as any).from('schools').select('id').limit(1);
+        if (schData && schData.length > 0) schoolId = schData[0].id;
+      } catch (eSch) {}
+
+      try {
+        const { data: crsData } = await (supabase as any).from('courses').select('id').limit(1);
+        if (crsData && crsData.length > 0) courseId = crsData[0].id;
+      } catch (eCrs) {}
+
+      // Primary Insert Strategy: Full payload including valid school_id & course_id
       let { data, error } = await (supabase as any).from('classes').insert({
         name: `${newClass.name} [${generatedCode}]`,
         code: generatedCode,
         class_code: generatedCode,
         teacher_id: user?.id,
+        school_id: schoolId,
+        course_id: courseId,
         course_name: newClass.courseName || 'Mata Pelajaran Umum',
         description: newClass.description || '',
         jurusan: newClass.jurusan || 'Semua Jurusan',
@@ -672,11 +688,14 @@ export const TeacherDashboard: React.FC = () => {
         is_active: true,
       }).select();
 
-      // Fallback Strategy: If column cache error, attempt inserting with name & academic_year
-      if (error && error.message.includes('column')) {
-        console.warn('⚠️ Primary class insert returned column notice, retrying fallback insert:', error.message);
+      // Fallback Strategy: Retry without school_id/course_id if columns drop constraint
+      if (error && (error.message.includes('school_id') || error.message.includes('course_id') || error.message.includes('column'))) {
+        console.warn('⚠️ Retrying class insert with secondary payload:', error.message);
         const retryRes = await (supabase as any).from('classes').insert({
           name: `${newClass.name} [${generatedCode}]`,
+          code: generatedCode,
+          class_code: generatedCode,
+          teacher_id: user?.id,
           academic_year: '2026/2027',
         }).select();
         data = retryRes.data;
@@ -685,7 +704,7 @@ export const TeacherDashboard: React.FC = () => {
 
       if (error || !data || data.length === 0) {
         console.error('❌ [Teacher Class Create Database Error]:', error);
-        alert(`Gagal menyimpan kelas ke database Supabase!\n\nPenyebab Error: ${error?.message || 'Akses ditolak atau kendala skema database.'}\n\nSilakan jalankan skrip migrasi SQL "supabase/09_drop_not_null_constraints.sql" pada SQL Editor Supabase Dashboard.`);
+        alert(`Gagal menyimpan kelas ke database Supabase!\n\nPenyebab Error: ${error?.message || 'Akses ditolak atau kendala skema database.'}`);
         return;
       }
 
