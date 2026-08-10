@@ -223,10 +223,15 @@ export const StudentDashboard: React.FC = () => {
             const teacher = teacherMap[c.teacher_id];
             const att = attCountMap[c.id];
             const attPercent = att && att.total > 0 ? Math.round((att.hadir / att.total) * 100) : 100;
+            const rawName = c.name || 'Kelas';
+            const matchCode = rawName.match(/\[(EDU[A-Z0-9]+)\]/i);
+            const extractedCode = c.code || c.class_code || (matchCode ? matchCode[1] : null) || 'EDU8XK21';
+            const cleanName = rawName.replace(/\s*\[EDU[A-Z0-9]+\]/i, '').trim();
+
             return {
               id: c.id,
-              name: c.name,
-              code: c.code || 'EDU8XK21',
+              name: cleanName || rawName,
+              code: extractedCode,
               courseName: c.course_name || 'Mata Pelajaran Umum',
               teacherName: teacher?.full_name || 'Guru EduVerse',
               teacherAvatar: teacher?.avatar_url || undefined,
@@ -234,8 +239,8 @@ export const StudentDashboard: React.FC = () => {
               jurusan: c.jurusan || 'Semua Jurusan',
               semester: c.semester || 'Ganjil',
               academicYear: c.academic_year || '2026/2027',
-              materialCount: matCountMap[c.id] || (matData?.length || 2),
-              assignmentCount: assCountMap[c.id] || (assData?.length || 1),
+              materialCount: matCountMap[c.id] || 0,
+              assignmentCount: assCountMap[c.id] || 0,
               attendancePercent: attPercent,
             };
           })
@@ -334,27 +339,82 @@ export const StudentDashboard: React.FC = () => {
   const handleCheckClassCode = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanCode = inputClassCode.trim().toUpperCase();
-    if (!cleanCode) return;
+    console.log('🔍 [Join Class Input]:', { rawInput: inputClassCode, cleanedCode: cleanCode, studentId: user?.id });
+
+    if (!cleanCode) {
+      setJoinError('Silakan masukkan kode kelas.');
+      return;
+    }
 
     setIsSearchingCode(true);
     setJoinError(null);
     setMatchedClassPreview(null);
 
     try {
-      // 1. Search in Supabase classes table by code
-      const { data, error } = await (supabase as any).from('classes').select('*').ilike('code', cleanCode);
+      let foundClass: any = null;
 
-      if (error || !data || data.length === 0) {
-        setJoinError('Kode kelas tidak ditemukan. Periksa kembali kode acak 8 karakter dari Guru.');
+      // Strategy 1: Search by code or class_code column
+      try {
+        const { data: codeData } = await (supabase as any)
+          .from('classes')
+          .select('*')
+          .or(`code.ilike.${cleanCode},class_code.ilike.${cleanCode}`);
+        if (codeData && codeData.length > 0) {
+          foundClass = codeData[0];
+        }
+      } catch (err1) {
+        console.warn('Strategy 1 notice:', err1);
+      }
+
+      // Strategy 2: Search by code column alone
+      if (!foundClass) {
+        try {
+          const { data: codeData2 } = await (supabase as any)
+            .from('classes')
+            .select('*')
+            .ilike('code', cleanCode);
+          if (codeData2 && codeData2.length > 0) {
+            foundClass = codeData2[0];
+          }
+        } catch (err2) {
+          console.warn('Strategy 2 notice:', err2);
+        }
+      }
+
+      // Strategy 3: Query all classes and check code / class_code / name in memory
+      if (!foundClass) {
+        try {
+          const { data: allCls } = await (supabase as any).from('classes').select('*');
+          if (allCls && allCls.length > 0) {
+            foundClass = allCls.find((c: any) => {
+              const cCode = (c.code || c.class_code || '').toString().trim().toUpperCase();
+              const cName = (c.name || '').toString().trim().toUpperCase();
+              return cCode === cleanCode || (cCode && cleanCode && cCode.includes(cleanCode)) || (cName && cleanCode && cName.includes(cleanCode));
+            });
+          }
+        } catch (err3) {
+          console.warn('Strategy 3 notice:', err3);
+        }
+      }
+
+      if (!foundClass) {
+        console.warn('❌ [Join Class] Kode kelas tidak ditemukan di database:', cleanCode);
+        setJoinError('Kode kelas tidak ditemukan.');
         setIsSearchingCode(false);
         return;
       }
 
-      const foundClass = data[0] as any;
+      console.log('✅ [Join Class Found Class]:', {
+        class_id: foundClass.id,
+        class_name: foundClass.name,
+        class_code: foundClass.code || foundClass.class_code,
+        is_active: foundClass.is_active,
+        student_id: user?.id,
+      });
 
       // 2. Check if Class is Active
       if (foundClass.is_active === false) {
-        setJoinError('Kelas sudah tidak menerima anggota baru. (Kelas telah ditutup oleh Guru)');
+        setJoinError('Kelas sudah tidak menerima anggota baru.');
         setIsSearchingCode(false);
         return;
       }
@@ -368,7 +428,8 @@ export const StudentDashboard: React.FC = () => {
           .eq('student_id', user.id);
 
         if (enrollCheck && enrollCheck.length > 0) {
-          setJoinError('Anda sudah menjadi anggota kelas ini.');
+          console.log('ℹ️ [Join Class] Siswa sudah terdaftar di kelas:', foundClass.id);
+          setJoinError('Anda sudah bergabung di kelas ini.');
           setIsSearchingCode(false);
           return;
         }
@@ -378,7 +439,11 @@ export const StudentDashboard: React.FC = () => {
       let teacherName = 'Guru EduVerse';
       let teacherAvatar = undefined;
       if (foundClass.teacher_id) {
-        const { data: teacherProf } = await (supabase as any).from('profiles').select('full_name, avatar_url').eq('id', foundClass.teacher_id).single();
+        const { data: teacherProf } = await (supabase as any)
+          .from('profiles')
+          .select('full_name, avatar_url')
+          .eq('id', foundClass.teacher_id)
+          .single();
         if (teacherProf) {
           teacherName = teacherProf.full_name;
           teacherAvatar = teacherProf.avatar_url;
@@ -391,7 +456,8 @@ export const StudentDashboard: React.FC = () => {
         teacherAvatar,
       });
     } catch (err: any) {
-      setJoinError('Gagal memverifikasi kode kelas: ' + err.message);
+      console.error('❌ [Join Class Verification Error]:', err);
+      setJoinError('Kode kelas tidak ditemukan.');
     } finally {
       setIsSearchingCode(false);
     }
@@ -402,17 +468,38 @@ export const StudentDashboard: React.FC = () => {
     if (!matchedClassPreview || !user?.id) return;
 
     setIsSubmittingJoin(true);
+    console.log('📌 [Join Class Inserting Payload]:', {
+      class_id: matchedClassPreview.id,
+      student_id: user.id,
+      class_name: matchedClassPreview.name,
+    });
+
     try {
       // Insert to Supabase enrollments table
-      const { error: insertErr } = await (supabase as any).from('enrollments').insert({
+      const { data: insertData, error: insertErr } = await (supabase as any).from('enrollments').insert({
         class_id: matchedClassPreview.id,
         student_id: user.id,
         status: 'active',
         enrolled_at: new Date().toISOString(),
-      });
+      }).select();
 
       if (insertErr && !insertErr.message.includes('duplicate')) {
-        console.warn('Enrollment notice:', insertErr.message);
+        console.error('❌ [Join Class Supabase INSERT Error]:', insertErr);
+        // Fallback insert with minimal payload
+        const { data: fallbackData, error: fallbackErr } = await (supabase as any).from('enrollments').insert({
+          class_id: matchedClassPreview.id,
+          student_id: user.id,
+        }).select();
+
+        if (fallbackErr && !fallbackErr.message.includes('duplicate')) {
+          console.error('❌ [Join Class Fallback INSERT Error]:', fallbackErr);
+          showToastNotification('error', 'Gagal bergabung ke kelas: ' + fallbackErr.message);
+          setIsSubmittingJoin(false);
+          return;
+        }
+        console.log('🎉 [Join Class Fallback INSERT Success]:', fallbackData);
+      } else {
+        console.log('🎉 [Join Class INSERT Success]:', insertData);
       }
 
       // Refresh Enrolled Classes State Immediately!
@@ -422,9 +509,10 @@ export const StudentDashboard: React.FC = () => {
       setInputClassCode('');
       setMatchedClassPreview(null);
 
-      showToastNotification('success', `🎉 Berhasil bergabung dengan kelas "${matchedClassPreview.name}"!`);
+      showToastNotification('success', 'Berhasil bergabung ke kelas.');
     } catch (err: any) {
-      showToastNotification('error', 'Gagal bergabung dengan kelas: ' + err.message);
+      console.error('❌ [Join Class Exception]:', err);
+      showToastNotification('error', 'Gagal bergabung ke kelas: ' + err.message);
     } finally {
       setIsSubmittingJoin(false);
     }

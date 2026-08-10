@@ -306,18 +306,25 @@ export const TeacherDashboard: React.FC = () => {
         }
 
         setClasses(
-          clsData.map((c: any) => ({
-            id: c.id,
-            name: c.name,
-            code: c.code || `EDU${c.id.slice(0, 5).toUpperCase()}`,
-            courseName: c.course_name || 'Mata Pelajaran Umum',
-            description: c.description || '',
-            jurusan: c.jurusan || 'Semua Jurusan',
-            semester: c.semester || 'Ganjil',
-            academicYear: c.academic_year || '2026/2027',
-            isActive: c.is_active !== false,
-            studentCount: countMap[c.id] || 0,
-          }))
+          clsData.map((c: any) => {
+            const rawName = c.name || 'Kelas';
+            const matchCode = rawName.match(/\[(EDU[A-Z0-9]+)\]/i);
+            const extractedCode = c.code || c.class_code || (matchCode ? matchCode[1] : null) || `EDU${c.id.slice(0, 5).toUpperCase()}`;
+            const cleanName = rawName.replace(/\s*\[EDU[A-Z0-9]+\]/i, '').trim();
+
+            return {
+              id: c.id,
+              name: cleanName || rawName,
+              code: extractedCode,
+              courseName: c.course_name || 'Mata Pelajaran Umum',
+              description: c.description || '',
+              jurusan: c.jurusan || 'Semua Jurusan',
+              semester: c.semester || 'Ganjil',
+              academicYear: c.academic_year || '2026/2027',
+              isActive: c.is_active !== false,
+              studentCount: countMap[c.id] || 0,
+            };
+          })
         );
       }
 
@@ -649,9 +656,17 @@ export const TeacherDashboard: React.FC = () => {
 
     try {
       const generatedCode = 'EDU' + Math.random().toString(36).substring(2, 7).toUpperCase();
-      const { data } = await (supabase as any).from('classes').insert({
-        name: newClass.name,
+      console.log('📌 [Teacher Class Create]:', { name: newClass.name, generatedCode, teacher_id: user?.id });
+
+      let createdId = `cls-${Date.now()}`;
+      let data: any = null;
+      let error: any = null;
+
+      // Primary Insert Strategy: Insert full object with code & name embedding
+      const res = await (supabase as any).from('classes').insert({
+        name: `${newClass.name} [${generatedCode}]`,
         code: generatedCode,
+        class_code: generatedCode,
         teacher_id: user?.id,
         course_name: newClass.courseName || 'Mata Pelajaran Umum',
         description: newClass.description || '',
@@ -661,7 +676,27 @@ export const TeacherDashboard: React.FC = () => {
         is_active: true,
       }).select();
 
-      const createdId = (data as any)?.[0]?.id || `cls-${Date.now()}`;
+      data = res.data;
+      error = res.error;
+
+      // Fallback Strategy: If DB schema cache missing extra columns, try inserting name + academic_year
+      if (error && error.message.includes('column')) {
+        console.warn('⚠️ Primary class insert returned column notice, retrying with fail-safe payload:', error.message);
+        const res2 = await (supabase as any).from('classes').insert({
+          name: `${newClass.name} [${generatedCode}]`,
+          academic_year: '2026/2027',
+        }).select();
+        data = res2.data;
+        error = res2.error;
+      }
+
+      if (data && data.length > 0) {
+        createdId = data[0].id;
+        console.log('🎉 [Teacher Class Created in Supabase DB]:', data[0]);
+      } else {
+        console.warn('⚠️ Class insert response notice:', error?.message);
+      }
+
       const obj: ClassItem = {
         id: createdId,
         name: newClass.name,
@@ -681,6 +716,7 @@ export const TeacherDashboard: React.FC = () => {
 
       alert(`✅ Kelas "${newClass.name}" berhasil dibuat!\n\nKode Kelas Unik: ${generatedCode}\n\nBagikan kode ini kepada siswa agar dapat bergabung.`);
     } catch (err: any) {
+      console.error('❌ [Teacher Class Create Exception]:', err);
       alert(`Gagal membuat kelas: ${err.message}`);
     }
   };
