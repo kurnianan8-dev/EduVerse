@@ -656,14 +656,10 @@ export const TeacherDashboard: React.FC = () => {
 
     try {
       const generatedCode = 'EDU' + Math.random().toString(36).substring(2, 7).toUpperCase();
-      console.log('📌 [Teacher Class Create]:', { name: newClass.name, generatedCode, teacher_id: user?.id });
+      console.log('📌 [Teacher Class Create Request]:', { name: newClass.name, generatedCode, teacher_id: user?.id });
 
-      let createdId = `cls-${Date.now()}`;
-      let data: any = null;
-      let error: any = null;
-
-      // Primary Insert Strategy: Insert full object with code & name embedding
-      const res = await (supabase as any).from('classes').insert({
+      // Primary Insert Strategy: Full payload with code & name embedding
+      let { data, error } = await (supabase as any).from('classes').insert({
         name: `${newClass.name} [${generatedCode}]`,
         code: generatedCode,
         class_code: generatedCode,
@@ -676,26 +672,25 @@ export const TeacherDashboard: React.FC = () => {
         is_active: true,
       }).select();
 
-      data = res.data;
-      error = res.error;
-
-      // Fallback Strategy: If DB schema cache missing extra columns, try inserting name + academic_year
+      // Fallback Strategy: If column cache error, attempt inserting with name & academic_year
       if (error && error.message.includes('column')) {
-        console.warn('⚠️ Primary class insert returned column notice, retrying with fail-safe payload:', error.message);
-        const res2 = await (supabase as any).from('classes').insert({
+        console.warn('⚠️ Primary class insert returned column notice, retrying fallback insert:', error.message);
+        const retryRes = await (supabase as any).from('classes').insert({
           name: `${newClass.name} [${generatedCode}]`,
           academic_year: '2026/2027',
         }).select();
-        data = res2.data;
-        error = res2.error;
+        data = retryRes.data;
+        error = retryRes.error;
       }
 
-      if (data && data.length > 0) {
-        createdId = data[0].id;
-        console.log('🎉 [Teacher Class Created in Supabase DB]:', data[0]);
-      } else {
-        console.warn('⚠️ Class insert response notice:', error?.message);
+      if (error || !data || data.length === 0) {
+        console.error('❌ [Teacher Class Create Database Error]:', error);
+        alert(`Gagal menyimpan kelas ke database Supabase!\n\nPenyebab Error: ${error?.message || 'Akses ditolak atau kendala skema database.'}\n\nSilakan jalankan skrip migrasi SQL "supabase/09_drop_not_null_constraints.sql" pada SQL Editor Supabase Dashboard.`);
+        return;
       }
+
+      const createdId = data[0].id;
+      console.log('🎉 [Teacher Class Successfully Saved to Supabase DB]:', data[0]);
 
       const obj: ClassItem = {
         id: createdId,
@@ -714,7 +709,7 @@ export const TeacherDashboard: React.FC = () => {
       setNewClass({ name: '', courseName: '', description: '', jurusan: 'Semua Jurusan', semester: 'Ganjil' });
       setShowClassModal(false);
 
-      alert(`✅ Kelas "${newClass.name}" berhasil dibuat!\n\nKode Kelas Unik: ${generatedCode}\n\nBagikan kode ini kepada siswa agar dapat bergabung.`);
+      alert(`✅ Kelas "${newClass.name}" berhasil dibuat dan tersimpan di Database Supabase!\n\nKode Kelas Unik: ${generatedCode}\n\nBagikan kode ini kepada siswa agar dapat bergabung.`);
     } catch (err: any) {
       console.error('❌ [Teacher Class Create Exception]:', err);
       alert(`Gagal membuat kelas: ${err.message}`);
