@@ -257,10 +257,15 @@ export const StudentDashboard: React.FC = () => {
         setSubmittedList(submittedMap);
       }
 
-      // 5. Fetch All Materials & Assignments for default view
-      if (matData) {
-        const { data: fullMats } = await supabase.from('materials').select('*').order('created_at', { ascending: false });
-        if (fullMats) {
+      // 5. Fetch Materials & Assignments for student's enrolled classes
+      if (classIds.length > 0) {
+        const { data: fullMats, error: matErr } = await supabase
+          .from('materials')
+          .select('*')
+          .in('class_id', classIds)
+          .order('created_at', { ascending: false });
+
+        if (fullMats && !matErr) {
           setMaterials(
             fullMats.map((m: any) => ({
               id: m.id,
@@ -270,15 +275,18 @@ export const StudentDashboard: React.FC = () => {
               fileType: m.file_type || 'pdf',
               fileUrl: m.file_url,
               description: m.description || '',
-              createdAt: m.created_at,
+              createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
             }))
           );
         }
-      }
 
-      if (assData) {
-        const { data: fullAss } = await supabase.from('assignments').select('*').order('created_at', { ascending: false });
-        if (fullAss) {
+        const { data: fullAss, error: assErr } = await supabase
+          .from('assignments')
+          .select('*')
+          .in('class_id', classIds)
+          .order('created_at', { ascending: false });
+
+        if (fullAss && !assErr) {
           setAssignments(
             fullAss.map((a: any) => ({
               id: a.id,
@@ -688,102 +696,107 @@ export const StudentDashboard: React.FC = () => {
           </div>
 
           {/* Classroom Workspace Tabs */}
-          <div className="flex border-b border-border overflow-x-auto gap-2">
-            <button
-              onClick={() => setClassWorkspaceTab('materi')}
-              className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-                classWorkspaceTab === 'materi'
-                  ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <BookOpen className="w-4 h-4" /> Tab Materi ({materials.length})
-            </button>
-            <button
-              onClick={() => setClassWorkspaceTab('tugas')}
-              className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-                classWorkspaceTab === 'tugas'
-                  ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <FileCheck className="w-4 h-4" /> Tab Tugas ({assignments.length})
-            </button>
-            <button
-              onClick={() => setClassWorkspaceTab('absensi')}
-              className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-                classWorkspaceTab === 'absensi'
-                  ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <QrCode className="w-4 h-4" /> Tab Absensi
-            </button>
-            <button
-              onClick={() => setClassWorkspaceTab('pengumuman')}
-              className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-                classWorkspaceTab === 'pengumuman'
-                  ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <Megaphone className="w-4 h-4 text-amber-500" /> Tab Pengumuman ({announcements.length})
-            </button>
-            <button
-              onClick={() => setClassWorkspaceTab('nilai')}
-              className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-                classWorkspaceTab === 'nilai'
-                  ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <BarChart3 className="w-4 h-4 text-emerald-500" /> Tab Nilai
-            </button>
-          </div>
-
-          {/* TAB 1: MATERI PEMBELAJARAN */}
-          {classWorkspaceTab === 'materi' && (
-            <div className="space-y-4">
-              {materials.length === 0 ? (
-                <div className="p-8 text-center bg-card border border-border rounded-2xl text-muted-foreground italic text-xs">
-                  Belum ada materi dipublikasikan oleh Guru untuk kelas ini.
+          {(() => {
+            const classMaterials = selectedClass ? materials.filter((m) => m.classId === selectedClass.id) : [];
+            const classAssignments = selectedClass ? assignments.filter((a) => a.classId === selectedClass.id) : [];
+            return (
+              <>
+                <div className="flex border-b border-border overflow-x-auto gap-2">
+                  <button
+                    onClick={() => setClassWorkspaceTab('materi')}
+                    className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                      classWorkspaceTab === 'materi'
+                        ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <BookOpen className="w-4 h-4" /> Tab Materi ({classMaterials.length})
+                  </button>
+                  <button
+                    onClick={() => setClassWorkspaceTab('tugas')}
+                    className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                      classWorkspaceTab === 'tugas'
+                        ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <FileCheck className="w-4 h-4" /> Tab Tugas ({classAssignments.length})
+                  </button>
+                  <button
+                    onClick={() => setClassWorkspaceTab('absensi')}
+                    className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                      classWorkspaceTab === 'absensi'
+                        ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <QrCode className="w-4 h-4" /> Tab Absensi
+                  </button>
+                  <button
+                    onClick={() => setClassWorkspaceTab('pengumuman')}
+                    className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                      classWorkspaceTab === 'pengumuman'
+                        ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Megaphone className="w-4 h-4 text-amber-500" /> Tab Pengumuman ({announcements.length})
+                  </button>
+                  <button
+                    onClick={() => setClassWorkspaceTab('nilai')}
+                    className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                      classWorkspaceTab === 'nilai'
+                        ? 'border-blue-600 text-blue-600 bg-blue-500/5 rounded-t-xl'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <BarChart3 className="w-4 h-4 text-emerald-500" /> Tab Nilai
+                  </button>
                 </div>
-              ) : (
-                materials.map((m) => (
-                  <div key={m.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-600 border border-blue-500/20">
-                          {m.fileType}
-                        </span>
-                        <span className="text-xs font-semibold text-muted-foreground">{m.subject}</span>
+
+                {/* TAB 1: MATERI PEMBELAJARAN */}
+                {classWorkspaceTab === 'materi' && (
+                  <div className="space-y-4">
+                    {classMaterials.length === 0 ? (
+                      <div className="p-8 text-center bg-card border border-border rounded-2xl text-muted-foreground italic text-xs">
+                        Belum ada materi dipublikasikan oleh Guru untuk kelas ini.
                       </div>
-                      <h4 className="font-bold text-base text-foreground">{m.title}</h4>
-                      <p className="text-xs text-muted-foreground">{m.description}</p>
-                    </div>
-                    <a
-                      href={m.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer transition-all"
-                    >
-                      <Download className="w-4 h-4" /> Unduh Berkas
-                    </a>
+                    ) : (
+                      classMaterials.map((m) => (
+                        <div key={m.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                                {m.fileType}
+                              </span>
+                              <span className="text-xs font-semibold text-muted-foreground">{m.subject}</span>
+                            </div>
+                            <h4 className="font-bold text-base text-foreground">{m.title}</h4>
+                            <p className="text-xs text-muted-foreground">{m.description}</p>
+                          </div>
+                          <a
+                            href={m.fileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer transition-all"
+                          >
+                            <Download className="w-4 h-4" /> Unduh Berkas
+                          </a>
+                        </div>
+                      ))
+                    )}
                   </div>
-                ))
-              )}
-            </div>
-          )}
+                )}
 
-          {/* TAB 2: TUGAS & PENILAIAN */}
-          {classWorkspaceTab === 'tugas' && (
-            <div className="space-y-4">
-              {assignments.length === 0 ? (
-                <div className="p-8 text-center bg-card border border-border rounded-2xl text-muted-foreground italic text-xs">
-                  Belum ada tugas diberikan oleh Guru untuk kelas ini.
-                </div>
-              ) : (
-                assignments.map((a) => (
+                {/* TAB 2: TUGAS & PENILAIAN */}
+                {classWorkspaceTab === 'tugas' && (
+                  <div className="space-y-4">
+                    {classAssignments.length === 0 ? (
+                      <div className="p-8 text-center bg-card border border-border rounded-2xl text-muted-foreground italic text-xs">
+                        Belum ada tugas diberikan oleh Guru untuk kelas ini.
+                      </div>
+                    ) : (
+                      classAssignments.map((a) => (
                   <div key={a.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm space-y-3">
                     <div className="flex items-center justify-between">
                       <h4 className="font-bold text-base text-foreground">{a.title}</h4>
@@ -928,8 +941,11 @@ export const StudentDashboard: React.FC = () => {
               </div>
             </div>
           )}
-        </div>
-      ) : (
+        </>
+      );
+    })()}
+  </div>
+) : (
         /* ========================================================= */
         /* SCREEN B: DAFTAR KARTU KELAS RUANG BELAJAR SISWA (Default Grid View) */
         /* ========================================================= */

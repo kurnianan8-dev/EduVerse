@@ -771,25 +771,34 @@ export const TeacherDashboard: React.FC = () => {
     if (!newMaterial.title || !selectedClass) return;
 
     try {
-      const { data } = await (supabase as any).from('materials').insert({
+      const { data, error } = await (supabase as any).from('materials').insert({
         class_id: selectedClass.id,
         teacher_id: user?.id,
         title: newMaterial.title,
-        file_type: newMaterial.fileType,
+        file_type: newMaterial.fileType || 'pdf',
         file_url: newMaterial.fileUrl || 'https://supabase.com/material.pdf',
-        description: newMaterial.description,
+        description: newMaterial.description || '',
       }).select();
 
+      if (error || !data || data.length === 0) {
+        console.error('❌ [Teacher Upload Material Error]:', error);
+        alert(`Gagal mengunggah materi ke database Supabase!\n\nPenyebab: ${error?.message || 'Akses ditolak atau kendala skema database.'}`);
+        return;
+      }
+
+      const createdMat = data[0];
+      console.log('🎉 [Teacher Upload Material Saved in DB]:', createdMat);
+
       const obj: MaterialItem = {
-        id: (data as any)?.[0]?.id || `m-${Date.now()}`,
+        id: createdMat.id,
         classId: selectedClass.id,
         title: newMaterial.title,
-        fileType: newMaterial.fileType,
+        fileType: newMaterial.fileType || 'pdf',
         fileUrl: newMaterial.fileUrl || 'https://supabase.com/material.pdf',
         fileName: newMaterial.fileName || 'Berkas_Materi.pdf',
-        description: newMaterial.description,
+        description: newMaterial.description || '',
         className: selectedClass.name,
-        createdAt: new Date().toLocaleDateString('id-ID'),
+        createdAt: new Date(createdMat.created_at || Date.now()).toLocaleDateString('id-ID'),
       };
 
       setMaterials([obj, ...materials]);
@@ -797,6 +806,7 @@ export const TeacherDashboard: React.FC = () => {
       setShowMaterialModal(false);
       alert(`✅ Materi "${newMaterial.title}" berhasil diunggah ke kelas "${selectedClass.name}"!`);
     } catch (err: any) {
+      console.error('❌ [Teacher Upload Material Exception]:', err);
       alert(`Gagal mengunggah materi: ${err.message}`);
     }
   };
