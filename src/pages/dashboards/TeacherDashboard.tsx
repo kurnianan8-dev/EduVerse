@@ -188,6 +188,7 @@ export const TeacherDashboard: React.FC = () => {
     fileName: '',
     description: '',
   });
+  const [selectedMaterialFile, setSelectedMaterialFile] = useState<File | null>(null);
 
   const [newAssignment, setNewAssignment] = useState({
     title: '',
@@ -735,33 +736,17 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Upload Material inside Selected Class
-  const handleMaterialFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Selection handler for Material file input (stores file object locally for upload on submit)
+  const handleMaterialFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const ext = file.name.split('.').pop()?.toLowerCase() || '';
-
-      let publicFileUrl = URL.createObjectURL(file);
-      try {
-        const filePath = `materials/${Date.now()}_${file.name}`;
-        const { data: uploadData, error: uploadErr } = await supabase.storage
-          .from('materials')
-          .upload(filePath, file);
-
-        if (!uploadErr && uploadData) {
-          const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
-          if (urlData?.publicUrl) publicFileUrl = urlData.publicUrl;
-        }
-      } catch (err) {
-        console.warn('Supabase storage upload fallback:', err);
-      }
-
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'pdf';
+      setSelectedMaterialFile(file);
       setNewMaterial((prev) => ({
         ...prev,
-        title: prev.title || file.name,
+        title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
         fileName: file.name,
-        fileType: ext || 'pdf',
-        fileUrl: publicFileUrl,
+        fileType: ext,
       }));
     }
   };
@@ -771,18 +756,56 @@ export const TeacherDashboard: React.FC = () => {
     if (!newMaterial.title || !selectedClass) return;
 
     try {
+      let finalPublicUrl = newMaterial.fileUrl || '';
+
+      // 1. Upload attached file directly to Supabase Storage 'materials' bucket
+      if (selectedMaterialFile) {
+        const cleanFileName = selectedMaterialFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const filePath = `${selectedClass.id}/${Date.now()}_${cleanFileName}`;
+
+        console.log('📌 [Teacher Storage Upload]: Uploading file to bucket "materials", path:', filePath);
+
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('materials')
+          .upload(filePath, selectedMaterialFile, {
+            cacheControl: '3600',
+            upsert: true,
+          });
+
+        if (uploadErr || !uploadData) {
+          console.error('❌ [Teacher Storage Upload Error]:', uploadErr);
+          alert(`Gagal mengunggah berkas ke Supabase Storage!\n\nPenyebab: ${uploadErr?.message || 'Bucket "materials" tidak merespons.'}\n\nPastikan bucket "materials" sudah dibuat dan memiliki akses publik di Supabase Storage.`);
+          return;
+        }
+
+        // Generate public URL using getPublicUrl()
+        const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
+        if (urlData?.publicUrl) {
+          finalPublicUrl = urlData.publicUrl;
+        }
+
+        console.log('🎉 [Teacher Storage Public URL Generated]:', finalPublicUrl);
+      }
+
+      // 2. Strict validation: Block local blob: URLs or empty URLs from saving to DB
+      if (!finalPublicUrl || finalPublicUrl.startsWith('blob:')) {
+        alert('URL berkas tidak valid! Berkas gagal diunggah ke Supabase Storage. Silakan pilih kembali berkas yang ingin diunggah.');
+        return;
+      }
+
+      // 3. Save material row in public.materials table
       const { data, error } = await (supabase as any).from('materials').insert({
         class_id: selectedClass.id,
         teacher_id: user?.id,
         title: newMaterial.title,
         file_type: newMaterial.fileType || 'pdf',
-        file_url: newMaterial.fileUrl || 'https://supabase.com/material.pdf',
+        file_url: finalPublicUrl,
         description: newMaterial.description || '',
       }).select();
 
       if (error || !data || data.length === 0) {
-        console.error('❌ [Teacher Upload Material Error]:', error);
-        alert(`Gagal mengunggah materi ke database Supabase!\n\nPenyebab: ${error?.message || 'Akses ditolak atau kendala skema database.'}`);
+        console.error('❌ [Teacher Upload Material DB Error]:', error);
+        alert(`Gagal menyimpan materi ke database Supabase!\n\nPenyebab: ${error?.message || 'Akses ditolak atau kendala skema database.'}`);
         return;
       }
 
@@ -794,8 +817,8 @@ export const TeacherDashboard: React.FC = () => {
         classId: selectedClass.id,
         title: newMaterial.title,
         fileType: newMaterial.fileType || 'pdf',
-        fileUrl: newMaterial.fileUrl || 'https://supabase.com/material.pdf',
-        fileName: newMaterial.fileName || 'Berkas_Materi.pdf',
+        fileUrl: finalPublicUrl,
+        fileName: newMaterial.fileName || selectedMaterialFile?.name || 'Berkas_Materi.pdf',
         description: newMaterial.description || '',
         className: selectedClass.name,
         createdAt: new Date(createdMat.created_at || Date.now()).toLocaleDateString('id-ID'),
@@ -803,8 +826,9 @@ export const TeacherDashboard: React.FC = () => {
 
       setMaterials([obj, ...materials]);
       setNewMaterial({ title: '', fileType: 'pdf', fileUrl: '', fileName: '', description: '' });
+      setSelectedMaterialFile(null);
       setShowMaterialModal(false);
-      alert(`✅ Materi "${newMaterial.title}" berhasil diunggah ke kelas "${selectedClass.name}"!`);
+      alert(`✅ Berkas materi "${newMaterial.title}" berhasil diunggah ke Supabase Storage & Database!\n\nSiswa yang terdaftar di kelas "${selectedClass.name}" sekarang dapat membuka dan mengunduh berkas ini.`);
     } catch (err: any) {
       console.error('❌ [Teacher Upload Material Exception]:', err);
       alert(`Gagal mengunggah materi: ${err.message}`);
