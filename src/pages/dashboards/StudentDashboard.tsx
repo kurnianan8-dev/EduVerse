@@ -353,6 +353,22 @@ export const StudentDashboard: React.FC = () => {
     }
   };
 
+  const handleOpenMaterialFile = (fileUrl: string, title: string) => {
+    console.log('📌 [Student Open Material File] Clicked:', { fileUrl, title });
+
+    if (!fileUrl || fileUrl.startsWith('blob:')) {
+      alert(`Materi "${title}" diunggah menggunakan URL lokal sementara (blob URL) dari browser Guru sebelum Supabase Storage diaktifkan.\n\nSilakan minta Guru untuk mengunggah ulang berkas materi ini.`);
+      return;
+    }
+
+    if (!fileUrl.startsWith('http://') && !fileUrl.startsWith('https://')) {
+      alert(`URL berkas materi "${title}" tidak valid.\n\nURL: ${fileUrl}`);
+      return;
+    }
+
+    window.open(fileUrl, '_blank', 'noopener,noreferrer');
+  };
+
   // Search & Validate Class Code when student enters code in modal
   const handleCheckClassCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -792,14 +808,13 @@ export const StudentDashboard: React.FC = () => {
                             <h4 className="font-bold text-base text-foreground">{m.title}</h4>
                             <p className="text-xs text-muted-foreground">{m.description}</p>
                           </div>
-                          <a
-                            href={m.fileUrl}
-                            target="_blank"
-                            rel="noreferrer"
+                          <button
+                            type="button"
+                            onClick={() => handleOpenMaterialFile(m.fileUrl, m.title)}
                             className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer transition-all"
                           >
                             <Download className="w-4 h-4" /> Unduh Berkas
-                          </a>
+                          </button>
                         </div>
                       ))
                     )}
