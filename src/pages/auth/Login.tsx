@@ -45,7 +45,11 @@ export const Login: React.FC = () => {
       const targetPath = selectedRole === 'guru' ? '/dashboard/guru' : '/dashboard/siswa';
       navigate(targetPath, { replace: true });
     } catch (err: any) {
-      setAuthError(err.message || 'Gagal masuk. Periksa kembali email dan kata sandi Anda di Supabase.');
+      const isFetchError = err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError') || err?.name === 'TypeError';
+      const userMessage = isFetchError
+        ? 'Gagal terhubung ke server Supabase (Failed to fetch). Periksa koneksi internet Anda atau pastikan project Supabase di Dashboard/Vercel dalam keadaan aktif (tidak paused).'
+        : (err.message || 'Gagal masuk. Periksa kembali email dan kata sandi Anda di Supabase.');
+      setAuthError(userMessage);
     } finally {
       setIsSubmitting(false);
     }
