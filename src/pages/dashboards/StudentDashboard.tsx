@@ -164,12 +164,19 @@ export const StudentDashboard: React.FC = () => {
   const fetchStudentEnrolledClasses = async () => {
     if (!user?.id) return;
     try {
-      // 1. Query enrollments table
-      const { data: enrollData } = await supabase.from('enrollments').select('class_id').eq('student_id', user.id);
+      // 1. Query enrollments table checking student_id or user_id
+      const { data: enrollData } = await supabase
+        .from('enrollments')
+        .select('class_id, student_id, user_id')
+        .or(`student_id.eq.${user.id},user_id.eq.${user.id}`);
+
       let classIds: string[] = [];
       if (enrollData && enrollData.length > 0) {
-        classIds = enrollData.map((e: any) => e.class_id).filter(Boolean);
+        classIds = Array.from(new Set(enrollData.map((e: any) => e.class_id).filter(Boolean)));
       }
+
+      console.log('📌 [StudentDashboard Audit] Current Student User ID:', user.id);
+      console.log('📌 [StudentDashboard Audit] Enrolled Class IDs:', classIds);
 
       // 2. Query classes
       let query = supabase.from('classes').select('*');
@@ -258,49 +265,52 @@ export const StudentDashboard: React.FC = () => {
       }
 
       // 5. Fetch Materials & Assignments for student's enrolled classes
+      let materialsQuery = supabase.from('materials').select('*').order('created_at', { ascending: false });
       if (classIds.length > 0) {
-        const { data: fullMats, error: matErr } = await supabase
-          .from('materials')
-          .select('*')
-          .in('class_id', classIds)
-          .order('created_at', { ascending: false });
+        materialsQuery = materialsQuery.in('class_id', classIds);
+      }
 
-        if (fullMats && !matErr) {
-          setMaterials(
-            fullMats.map((m: any) => ({
-              id: m.id,
-              classId: m.class_id,
-              title: m.title,
-              subject: 'Mata Pelajaran',
-              fileType: m.file_type || 'pdf',
-              fileUrl: m.file_url,
-              description: m.description || '',
-              createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
-            }))
-          );
-        }
+      const { data: fullMats, error: matErr } = await materialsQuery;
 
-        const { data: fullAss, error: assErr } = await supabase
-          .from('assignments')
-          .select('*')
-          .in('class_id', classIds)
-          .order('created_at', { ascending: false });
+      console.log('📌 [StudentDashboard Audit] Materials Query Result:', fullMats);
+      console.log('📌 [StudentDashboard Audit] Materials Query Error:', matErr);
 
-        if (fullAss && !assErr) {
-          setAssignments(
-            fullAss.map((a: any) => ({
-              id: a.id,
-              classId: a.class_id,
-              title: a.title,
-              subject: 'Mata Pelajaran',
-              dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
-              status: submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan',
-              description: a.description || '',
-              grade: submittedMap[a.id]?.grade,
-              feedback: submittedMap[a.id]?.feedback,
-            }))
-          );
-        }
+      if (fullMats && !matErr) {
+        setMaterials(
+          fullMats.map((m: any) => ({
+            id: m.id,
+            classId: String(m.class_id || '').trim(),
+            title: m.title,
+            subject: 'Mata Pelajaran',
+            fileType: m.file_type || 'pdf',
+            fileUrl: m.file_url,
+            description: m.description || '',
+            createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
+          }))
+        );
+      }
+
+      let assignmentsQuery = supabase.from('assignments').select('*').order('created_at', { ascending: false });
+      if (classIds.length > 0) {
+        assignmentsQuery = assignmentsQuery.in('class_id', classIds);
+      }
+
+      const { data: fullAss, error: assErr } = await assignmentsQuery;
+
+      if (fullAss && !assErr) {
+        setAssignments(
+          fullAss.map((a: any) => ({
+            id: a.id,
+            classId: String(a.class_id || '').trim(),
+            title: a.title,
+            subject: 'Mata Pelajaran',
+            dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
+            status: submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan',
+            description: a.description || '',
+            grade: submittedMap[a.id]?.grade,
+            feedback: submittedMap[a.id]?.feedback,
+          }))
+        );
       }
 
       // 6. Fetch Announcements
@@ -697,8 +707,16 @@ export const StudentDashboard: React.FC = () => {
 
           {/* Classroom Workspace Tabs */}
           {(() => {
-            const classMaterials = selectedClass ? materials.filter((m) => m.classId === selectedClass.id) : [];
-            const classAssignments = selectedClass ? assignments.filter((a) => a.classId === selectedClass.id) : [];
+            const classMaterials = selectedClass
+              ? materials.filter((m) => String(m.classId).trim().toLowerCase() === String(selectedClass.id).trim().toLowerCase())
+              : [];
+            const classAssignments = selectedClass
+              ? assignments.filter((a) => String(a.classId).trim().toLowerCase() === String(selectedClass.id).trim().toLowerCase())
+              : [];
+
+            console.log('📌 [StudentDashboard Audit] Selected Class ID:', selectedClass?.id);
+            console.log('📌 [StudentDashboard Audit] Count of Class Materials Found:', classMaterials.length);
+
             return (
               <>
                 <div className="flex border-b border-border overflow-x-auto gap-2">
