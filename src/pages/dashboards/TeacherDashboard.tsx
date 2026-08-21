@@ -761,7 +761,8 @@ export const TeacherDashboard: React.FC = () => {
       // 1. Upload attached file directly to Supabase Storage 'materials' bucket
       if (selectedMaterialFile) {
         const cleanFileName = selectedMaterialFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const filePath = `${selectedClass.id}/${Date.now()}_${cleanFileName}`;
+        const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now();
+        const filePath = `${selectedClass.id}/${uniqueId}-${cleanFileName}`;
 
         console.log('📌 [Teacher Storage Upload]: Uploading file to bucket "materials", path:', filePath);
 
@@ -772,21 +773,25 @@ export const TeacherDashboard: React.FC = () => {
             upsert: true,
           });
 
-        if (!uploadErr && uploadData) {
-          const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
-          if (urlData?.publicUrl) {
-            finalPublicUrl = urlData.publicUrl;
-          }
+        if (uploadErr || !uploadData) {
+          console.error('❌ [Teacher Storage Upload Error]:', uploadErr);
+          alert(`Gagal mengunggah berkas ke Supabase Storage!\n\nPenyebab: ${uploadErr?.message || 'Gagal menyimpan berkas ke Storage.'}\n\nPastikan RLS policy storage.objects untuk bucket "materials" sudah diaktifkan di Supabase.`);
+          return; // HALT EXECUTION: DO NOT INSERT INTO DB IF STORAGE UPLOAD FAILED
+        }
+
+        // 2. Get Public URL using getPublicUrl(filePath)
+        const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
+        if (urlData?.publicUrl) {
+          finalPublicUrl = urlData.publicUrl;
         } else {
-          console.warn('⚠️ [Storage Upload Warning]:', uploadErr?.message || 'Bucket materials notice.');
-          // Fallback to standard Supabase Storage Public URL path
-          finalPublicUrl = `https://sgeuusdwmulifctzvnic.supabase.co/storage/v1/object/public/materials/${filePath}`;
+          alert('Gagal mengambil Public URL dari Supabase Storage.');
+          return;
         }
 
         console.log('🎉 [Teacher Storage Public URL Generated]:', finalPublicUrl);
-      } else if (!finalPublicUrl || finalPublicUrl.startsWith('blob:')) {
-        // Fallback default URL if no file attached
-        finalPublicUrl = `https://sgeuusdwmulifctzvnic.supabase.co/storage/v1/object/public/materials/${selectedClass.id}/default_material.pdf`;
+      } else if (!finalPublicUrl || !finalPublicUrl.startsWith('http')) {
+        alert('Silakan pilih berkas yang ingin diunggah.');
+        return;
       }
 
       // 3. Save material row in public.materials table
