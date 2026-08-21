@@ -842,22 +842,31 @@ export const TeacherDashboard: React.FC = () => {
     if (!newAssignment.title || !selectedClass) return;
 
     try {
-      const { data } = await (supabase as any).from('assignments').insert({
+      const { data, error } = await (supabase as any).from('assignments').insert({
         class_id: selectedClass.id,
         teacher_id: user?.id,
         title: newAssignment.title,
-        description: newAssignment.description,
+        description: newAssignment.description || '',
         due_date: newAssignment.dueDate ? new Date(newAssignment.dueDate).toISOString() : null,
+        due_at: newAssignment.dueDate ? new Date(newAssignment.dueDate).toISOString() : null,
+        attachment_url: newAssignment.fileUrl || null,
         file_url: newAssignment.fileUrl || null,
         file_name: newAssignment.fileName || null,
         max_score: newAssignment.maxScore || 100,
       }).select();
 
+      if (error || !data || data.length === 0) {
+        console.error('❌ [Teacher Create Assignment DB Error]:', error);
+        alert(`Gagal menyimpan tugas ke Supabase Database!\n\nPenyebab: ${error?.message || 'Gagal insert ke tabel assignments. Pastikan skrip migration 13_assignments_and_submissions.sql sudah dijalankan di Supabase.'}`);
+        return;
+      }
+
+      const createdAss = data[0];
       const obj: AssignmentItem = {
-        id: (data as any)?.[0]?.id || `ass-${Date.now()}`,
+        id: createdAss.id,
         classId: selectedClass.id,
         title: newAssignment.title,
-        description: newAssignment.description,
+        description: newAssignment.description || '',
         dueDate: newAssignment.dueDate || 'Tanpa Tenggat',
         className: selectedClass.name,
         fileUrl: newAssignment.fileUrl,
@@ -869,7 +878,7 @@ export const TeacherDashboard: React.FC = () => {
       setAssignments([obj, ...assignments]);
       setNewAssignment({ title: '', description: '', dueDate: '', fileUrl: '', fileName: '', maxScore: 100 });
       setShowAssignmentModal(false);
-      alert(`✅ Tugas "${newAssignment.title}" berhasil dibuat di kelas "${selectedClass.name}"!`);
+      alert(`✅ Tugas "${newAssignment.title}" berhasil dibuat di database Supabase kelas "${selectedClass.name}"!`);
     } catch (err: any) {
       alert(`Gagal membuat tugas: ${err.message}`);
     }

@@ -74,8 +74,11 @@ interface StudentAssignment {
   dueDate: string;
   status: 'Belum Dikumpulkan' | 'Sudah Dikumpulkan';
   description: string;
+  attachmentUrl?: string;
   grade?: number;
   feedback?: string;
+  submittedAt?: string;
+  submittedFileUrl?: string;
 }
 
 interface AnnouncementItem {
@@ -255,14 +258,22 @@ export const StudentDashboard: React.FC = () => {
         );
       }
 
-      // 4. Fetch Submissions
-      const submittedMap: Record<string, { grade?: number; feedback?: string }> = {};
-      const { data: subData } = await supabase.from('submissions').select('assignment_id, grade, feedback').eq('student_id', user.id);
-      if (subData) {
+      // 4. Fetch Submissions for logged-in student
+      const submittedMap: Record<string, { grade?: number; feedback?: string; fileUrl?: string; fileName?: string; submittedAt?: string }> = {};
+      const { data: subData, error: subErr } = await supabase.from('submissions').select('*').eq('student_id', user.id);
+      if (subData && !subErr) {
         subData.forEach((s: any) => {
-          submittedMap[s.assignment_id] = { grade: s.grade, feedback: s.feedback };
+          submittedMap[s.assignment_id] = {
+            grade: s.score !== null && s.score !== undefined ? s.score : s.grade,
+            feedback: s.feedback,
+            fileUrl: s.file_url,
+            fileName: s.file_name,
+            submittedAt: s.submitted_at,
+          };
         });
         setSubmittedList(submittedMap);
+      } else if (subErr) {
+        console.warn('[Student Assignment Audit Error - Submissions]:', subErr.message);
       }
 
       // 5. Fetch Materials & Assignments for student's enrolled classes
@@ -272,9 +283,6 @@ export const StudentDashboard: React.FC = () => {
       }
 
       const { data: fullMats, error: matErr } = await materialsQuery;
-
-      console.log('📌 [StudentDashboard Audit] Materials Query Result:', fullMats);
-      console.log('📌 [StudentDashboard Audit] Materials Query Error:', matErr);
 
       if (fullMats && !matErr) {
         setMaterials(
@@ -298,6 +306,15 @@ export const StudentDashboard: React.FC = () => {
 
       const { data: fullAss, error: assErr } = await assignmentsQuery;
 
+      console.log('[Student Assignment Audit]', {
+        userId: user.id,
+        classIds,
+        assignments: fullAss,
+        assignmentsError: assErr,
+        submissions: subData,
+        submissionsError: subErr,
+      });
+
       if (fullAss && !assErr) {
         setAssignments(
           fullAss.map((a: any) => ({
@@ -305,13 +322,18 @@ export const StudentDashboard: React.FC = () => {
             classId: String(a.class_id || '').trim(),
             title: a.title,
             subject: 'Mata Pelajaran',
-            dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
+            dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
             status: submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan',
             description: a.description || '',
+            attachmentUrl: a.attachment_url || a.file_url || '',
             grade: submittedMap[a.id]?.grade,
             feedback: submittedMap[a.id]?.feedback,
+            submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
+            submittedFileUrl: submittedMap[a.id]?.fileUrl,
           }))
         );
+      } else if (assErr) {
+        console.error('[Student Assignment Audit Error - Assignments]:', assErr);
       }
 
       // 6. Fetch Announcements
@@ -1244,34 +1266,64 @@ export const StudentDashboard: React.FC = () => {
       {/* MODAL: SUBMIT ASSIGNMENT */}
       {selectedAssignment && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4">
+          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-lg shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-base font-bold text-foreground">Pengumpulan Tugas: {selectedAssignment.title}</h3>
-              <button onClick={() => setSelectedAssignment(null)} className="text-muted-foreground hover:text-foreground">
+              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                <FileCheck className="w-5 h-5 text-blue-600" /> {selectedAssignment.title}
+              </h3>
+              <button onClick={() => setSelectedAssignment(null)} className="text-muted-foreground hover:text-foreground cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitAssignment} className="space-y-4">
+            <div className="p-4 rounded-2xl bg-muted/40 border border-border/60 space-y-2 text-left">
+              <p className="text-xs text-foreground leading-relaxed">{selectedAssignment.description}</p>
+              <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/40">
+                <span>Tenggat Waktu: <strong className="text-amber-600">{selectedAssignment.dueDate}</strong></span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${selectedAssignment.status === 'Sudah Dikumpulkan' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                  {selectedAssignment.status}
+                </span>
+              </div>
+              {selectedAssignment.attachmentUrl && (
+                <div className="pt-2">
+                  <a
+                    href={selectedAssignment.attachmentUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:underline"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Unduh Lampiran Berkas dari Guru
+                  </a>
+                </div>
+              )}
+            </div>
+
+            {selectedAssignment.status === 'Sudah Dikumpulkan' && (
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-700 flex flex-col gap-1 text-left">
+                <span className="font-bold flex items-center gap-1">✓ Berkas Jawaban Telah Dikumpulkan</span>
+                {selectedAssignment.submittedAt && <span>Dikirim pada: {selectedAssignment.submittedAt}</span>}
+                {selectedAssignment.submittedFileUrl && (
+                  <a href={selectedAssignment.submittedFileUrl} target="_blank" rel="noreferrer" className="text-blue-600 font-bold hover:underline mt-1">
+                    📄 Lihat Berkas Jawaban Terkirim
+                  </a>
+                )}
+                {selectedAssignment.grade !== undefined && (
+                  <span className="font-bold text-emerald-800 mt-1">Nilai Guru: {selectedAssignment.grade} / 100 {selectedAssignment.feedback ? `• Catatan: "${selectedAssignment.feedback}"` : ''}</span>
+                )}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitAssignment} className="space-y-4 text-left">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">Pilih Berkas Jawaban (PDF / Word / Gambar / Zip)</label>
+                <label className="text-xs font-bold text-foreground">
+                  {selectedAssignment.status === 'Sudah Dikumpulkan' ? 'Kirim Ulang Berkas Jawaban (Opsional)' : 'Pilih Berkas Jawaban (PDF / Word / Gambar / Zip)'}
+                </label>
                 <input
                   type="file"
                   onChange={handleSubmissionFileChange}
                   className="w-full text-xs text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
                 />
                 {submissionFileName && <p className="text-xs font-semibold text-emerald-600">Terpilih: {submissionFileName}</p>}
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">Catatan Tambahan untuk Guru</label>
-                <textarea
-                  rows={3}
-                  value={submissionNotes}
-                  onChange={(e) => setSubmissionNotes(e.target.value)}
-                  placeholder="Tuliskan pesan atau catatan pengerjaan tugas..."
-                  className="w-full px-3 py-2 rounded-xl bg-muted/60 border border-border text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
               </div>
 
               <div className="flex gap-3 pt-2">
@@ -1284,9 +1336,10 @@ export const StudentDashboard: React.FC = () => {
                 </button>
                 <button
                   type="submit"
+                  disabled={isSubmittingJoin}
                   className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  Kirim Jawaban
+                  {isSubmittingJoin ? 'Mengunggah...' : selectedAssignment.status === 'Sudah Dikumpulkan' ? 'Update Jawaban' : 'Kumpulkan Tugas'}
                 </button>
               </div>
             </form>
