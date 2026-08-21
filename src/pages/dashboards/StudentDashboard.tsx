@@ -127,7 +127,8 @@ export const StudentDashboard: React.FC = () => {
   const [submissionNotes, setSubmissionNotes] = useState('');
   const [submissionFileUrl, setSubmissionFileUrl] = useState('');
   const [submissionFileName, setSubmissionFileName] = useState('');
-  const [submittedList, setSubmittedList] = useState<Record<string, { grade?: number; feedback?: string }>>({});
+  const [selectedSubmissionFile, setSelectedSubmissionFile] = useState<File | null>(null);
+  const [submittedList, setSubmittedList] = useState<Record<string, { grade?: number; feedback?: string; fileUrl?: string; fileName?: string; submittedAt?: string }>>({});
 
   // Toast Notification
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -553,55 +554,119 @@ export const StudentDashboard: React.FC = () => {
   };
 
   // Submission Upload Handler
-  const handleSubmissionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSubmissionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      let publicFileUrl = URL.createObjectURL(file);
-      try {
-        const filePath = `submissions/${Date.now()}_${file.name}`;
-        const { data: uploadData, error: uploadErr } = await supabase.storage
-          .from('materials')
-          .upload(filePath, file);
-
-        if (!uploadErr && uploadData) {
-          const { data: urlData } = supabase.storage.from('materials').getPublicUrl(filePath);
-          if (urlData?.publicUrl) publicFileUrl = urlData.publicUrl;
-        }
-      } catch (err) {
-        console.warn('Storage upload fallback:', err);
-      }
-
-      setSubmissionFileUrl(publicFileUrl);
+      setSelectedSubmissionFile(file);
       setSubmissionFileName(file.name);
     }
   };
 
   const handleSubmitAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedAssignment) return;
+    if (!selectedAssignment || !user?.id) return;
+    if (!selectedSubmissionFile && !submissionFileUrl) {
+      showToastNotification('error', 'Silakan pilih berkas jawaban tugas Anda.');
+      return;
+    }
 
+    setIsSubmittingJoin(true);
     try {
-      const { error } = await (supabase as any).from('submissions').insert({
+      let finalFileUrl = submissionFileUrl || '';
+      let finalFileName = submissionFileName || selectedSubmissionFile?.name || 'Jawaban_Tugas.pdf';
+
+      if (selectedSubmissionFile) {
+        const cleanFileName = selectedSubmissionFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now();
+        const filePath = `${selectedAssignment.id}/${user.id}/${uniqueId}-${cleanFileName}`;
+
+        console.log('📌 [Submission Storage Upload]: Uploading to bucket "student-submissions", path:', filePath);
+
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('student-submissions')
+          .upload(filePath, selectedSubmissionFile, {
+            cacheControl: '3600',
+            upsert: true,
+          });
+
+        if (uploadErr || !uploadData) {
+          console.error('❌ [Submission Storage Upload Error]:', uploadErr);
+          alert(`Gagal mengunggah berkas ke Supabase Storage!\n\nPenyebab: ${uploadErr?.message || 'Akses ditolak.'}`);
+          setIsSubmittingJoin(false);
+          return;
+        }
+
+        const { data: urlData } = supabase.storage.from('student-submissions').getPublicUrl(filePath);
+        if (urlData?.publicUrl) {
+          finalFileUrl = urlData.publicUrl;
+        } else {
+          alert('Gagal mengambil Public URL dari Supabase Storage.');
+          setIsSubmittingJoin(false);
+          return;
+        }
+      }
+
+      if (!finalFileUrl || finalFileUrl.startsWith('blob:')) {
+        alert('URL berkas jawaban tidak valid.');
+        setIsSubmittingJoin(false);
+        return;
+      }
+
+      console.log('📌 [Submission DB Upsert] Inserting submission into DB:', {
         assignment_id: selectedAssignment.id,
-        student_id: user?.id,
-        file_url: submissionFileUrl || 'https://supabase.com/file-jawaban-siswa.pdf',
-        notes: submissionNotes,
+        student_id: user.id,
+        file_url: finalFileUrl,
+        file_name: finalFileName,
       });
 
-      if (error) console.warn('Submission notice:', error.message);
+      const { data: subData, error: subErr } = await (supabase as any)
+        .from('submissions')
+        .upsert(
+          {
+            assignment_id: selectedAssignment.id,
+            student_id: user.id,
+            file_url: finalFileUrl,
+            file_name: finalFileName,
+            submitted_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'assignment_id,student_id' }
+        )
+        .select();
 
-      setSubmittedList((prev) => ({ ...prev, [selectedAssignment.id]: {} }));
+      if (subErr) {
+        console.error('❌ [Submission DB Upsert Error]:', subErr);
+        alert(`Gagal menyimpan pengumpulan tugas ke database!\n\nPenyebab: ${subErr.message}`);
+        setIsSubmittingJoin(false);
+        return;
+      }
+
+      console.log('🎉 [Submission DB Upsert Success]:', subData);
+
+      setSubmittedList((prev) => ({
+        ...prev,
+        [selectedAssignment.id]: {
+          fileUrl: finalFileUrl,
+          fileName: finalFileName,
+          submittedAt: new Date().toISOString(),
+        },
+      }));
+
       setAssignments((prev) =>
         prev.map((a) => (a.id === selectedAssignment.id ? { ...a, status: 'Sudah Dikumpulkan' } : a))
       );
 
-      showToastNotification('success', `✅ Tugas "${selectedAssignment.title}" berhasil dikumpulkan!`);
+      showToastNotification('success', `✓ Tugas "${selectedAssignment.title}" berhasil dikumpulkan!`);
       setSelectedAssignment(null);
+      setSelectedSubmissionFile(null);
       setSubmissionNotes('');
       setSubmissionFileUrl('');
       setSubmissionFileName('');
     } catch (err: any) {
-      showToastNotification('error', `Gagal mengirimkan tugas: ${err.message}`);
+      console.error('❌ [Submission Exception]:', err);
+      alert(`Gagal mengirimkan tugas: ${err.message}`);
+    } finally {
+      setIsSubmittingJoin(false);
     }
   };
 
