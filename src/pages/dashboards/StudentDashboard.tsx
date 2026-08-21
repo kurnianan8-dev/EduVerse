@@ -75,6 +75,7 @@ interface StudentAssignment {
   status: 'Belum Dikumpulkan' | 'Sudah Dikumpulkan';
   description: string;
   attachmentUrl?: string;
+  maxScore?: number;
   grade?: number;
   feedback?: string;
   submittedAt?: string;
@@ -299,41 +300,46 @@ export const StudentDashboard: React.FC = () => {
         );
       }
 
-      let assignmentsQuery = supabase.from('assignments').select('*').order('created_at', { ascending: false });
       if (classIds.length > 0) {
-        assignmentsQuery = assignmentsQuery.in('class_id', classIds);
-      }
+        const { data: fullAss, error: assErr } = await supabase
+          .from('assignments')
+          .select('*')
+          .in('class_id', classIds)
+          .order('created_at', { ascending: false });
 
-      const { data: fullAss, error: assErr } = await assignmentsQuery;
+        console.log('[Student Assignment Audit]', {
+          userId: user.id,
+          classIds,
+          assignments: fullAss,
+          assignmentsError: assErr,
+          submissions: subData,
+          submissionsError: subErr,
+        });
 
-      console.log('[Student Assignment Audit]', {
-        userId: user.id,
-        classIds,
-        assignments: fullAss,
-        assignmentsError: assErr,
-        submissions: subData,
-        submissionsError: subErr,
-      });
-
-      if (fullAss && !assErr) {
-        setAssignments(
-          fullAss.map((a: any) => ({
-            id: a.id,
-            classId: String(a.class_id || '').trim(),
-            title: a.title,
-            subject: 'Mata Pelajaran',
-            dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
-            status: submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan',
-            description: a.description || '',
-            attachmentUrl: a.attachment_url || a.file_url || '',
-            grade: submittedMap[a.id]?.grade,
-            feedback: submittedMap[a.id]?.feedback,
-            submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
-            submittedFileUrl: submittedMap[a.id]?.fileUrl,
-          }))
-        );
-      } else if (assErr) {
-        console.error('[Student Assignment Audit Error - Assignments]:', assErr);
+        if (fullAss && !assErr) {
+          setAssignments(
+            fullAss.map((a: any) => ({
+              id: a.id,
+              classId: String(a.class_id || '').trim(),
+              title: a.title,
+              subject: 'Mata Pelajaran',
+              dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
+              maxScore: a.max_score || 100,
+              status: submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan',
+              description: a.description || '',
+              attachmentUrl: a.attachment_url || a.file_url || '',
+              grade: submittedMap[a.id]?.grade,
+              feedback: submittedMap[a.id]?.feedback,
+              submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
+              submittedFileUrl: submittedMap[a.id]?.fileUrl,
+            }))
+          );
+        } else if (assErr) {
+          console.error('[Student Assignment Audit Error - Assignments]:', assErr);
+        }
+      } else {
+        console.log('[Student Assignment Audit] classIds is empty. Skipping assignments query.');
+        setAssignments([]);
       }
 
       // 6. Fetch Announcements
@@ -917,7 +923,7 @@ export const StudentDashboard: React.FC = () => {
                       </div>
                     ) : (
                       classAssignments.map((a) => (
-                  <div key={a.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm space-y-3">
+                  <div key={a.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm space-y-3 text-left">
                     <div className="flex items-center justify-between">
                       <h4 className="font-bold text-base text-foreground">{a.title}</h4>
                       <span
@@ -931,16 +937,19 @@ export const StudentDashboard: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground">{a.description}</p>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground border-t border-border pt-3">
-                      <span>Tenggat: <strong>{a.dueDate}</strong></span>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs text-muted-foreground border-t border-border pt-3 gap-2">
+                      <div className="space-y-0.5">
+                        <div>Deadline: <strong className="text-amber-600">{a.dueDate}</strong></div>
+                        <div>Nilai Maksimal: <strong>{a.maxScore || 100} Poin</strong></div>
+                      </div>
                       {a.grade !== undefined && (
-                        <span className="font-bold text-emerald-600">Nilai: {a.grade} / 100</span>
+                        <span className="font-bold text-emerald-600">Nilai: {a.grade} / {a.maxScore || 100}</span>
                       )}
                       <button
                         onClick={() => setSelectedAssignment(a)}
-                        className="px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer hover:bg-blue-700 transition-all"
+                        className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer hover:bg-blue-700 transition-all shadow self-start sm:self-auto"
                       >
-                        Kumpulkan Tugas
+                        {a.status === 'Sudah Dikumpulkan' ? 'Lihat / Edit Jawaban' : 'Kerjakan / Kumpulkan'}
                       </button>
                     </div>
                   </div>
