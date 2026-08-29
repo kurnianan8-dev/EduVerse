@@ -605,21 +605,25 @@ export const StudentDashboard: React.FC = () => {
 
       if (selectedSubmissionFile) {
         const cleanFileName = selectedSubmissionFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now();
+        const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
         const filePath = `${selectedAssignment.id}/${user.id}/${uniqueId}-${cleanFileName}`;
 
-        console.log('📌 [Submission Storage Upload]: Uploading to bucket "student-submissions", path:', filePath);
+        console.log('📌 [Student Submission Storage Upload]: Uploading to bucket "student-submissions", path:', filePath);
 
         const { data: uploadData, error: uploadErr } = await supabase.storage
           .from('student-submissions')
           .upload(filePath, selectedSubmissionFile, {
             cacheControl: '3600',
-            upsert: true,
+            upsert: false,
           });
 
         if (uploadErr || !uploadData) {
-          console.error('❌ [Submission Storage Upload Error]:', uploadErr);
-          alert(`Gagal mengunggah berkas ke Supabase Storage!\n\nPenyebab: ${uploadErr?.message || 'Akses ditolak.'}`);
+          console.error('❌ [Student Submission Storage Upload Error]:', uploadErr);
+          alert(
+            `Gagal mengunggah tugas ke Supabase Storage!\n\n` +
+            `Penyebab: ${uploadErr?.message || 'Upload gagal.'}\n\n` +
+            `Solusi: Pastikan skrip SQL "storage.buckets ('student-submissions')" sudah dijalankan di Supabase SQL Editor.`
+          );
           setIsSubmittingJoin(false);
           return;
         }
@@ -644,7 +648,7 @@ export const StudentDashboard: React.FC = () => {
         assignment_id: selectedAssignment.id,
         student_id: user.id,
         file_url: finalFileUrl,
-        file_name: finalFileName,
+        file_name: selectedSubmissionFile?.name || submissionFileName || 'jawaban.pdf',
       });
 
       const { data: subData, error: subErr } = await (supabase as any)
@@ -654,7 +658,7 @@ export const StudentDashboard: React.FC = () => {
             assignment_id: selectedAssignment.id,
             student_id: user.id,
             file_url: finalFileUrl,
-            file_name: finalFileName,
+            file_name: selectedSubmissionFile?.name || submissionFileName || 'jawaban.pdf',
             submitted_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           },
@@ -1031,39 +1035,81 @@ export const StudentDashboard: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 5: REKAP NILAI SISWA */}
+          {/* TAB 5: REKAP & TRANSKRIP NILAI SISWA */}
           {classWorkspaceTab === 'nilai' && (
-            <div className="p-6 rounded-2xl bg-card border border-border shadow-sm space-y-4">
-              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-emerald-600" /> Transkrip Nilai Siswa
-              </h3>
+            <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4 text-left">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <div>
+                  <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5 text-emerald-600" /> Transkrip & Rekap Nilai Siswa ({classAssignments.length})
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">Daftar nilai resmi dan umpan balik tugas dari Guru pengampu kelas ini.</p>
+                </div>
+              </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
                     <tr>
-                      <th className="p-3">Komponen / Tugas</th>
-                      <th className="p-3">Kategori</th>
+                      <th className="p-3">Judul Tugas</th>
+                      <th className="p-3">Status Pengumpulan</th>
                       <th className="p-3">Nilai Siswa</th>
-                      <th className="p-3">Catatan / Feedback</th>
+                      <th className="p-3">Catatan / Feedback Guru</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {gradesList.length === 0 ? (
+                    {classAssignments.length === 0 ? (
                       <tr>
                         <td colSpan={4} className="p-4 text-center text-xs text-muted-foreground italic">
-                          Belum ada nilai diinputkan oleh Guru.
+                          Belum ada tugas dipublikasikan untuk kelas ini.
                         </td>
                       </tr>
                     ) : (
-                      gradesList.map((g) => (
-                        <tr key={g.id} className="hover:bg-muted/30">
-                          <td className="p-3 font-bold text-foreground">{g.itemTitle}</td>
-                          <td className="p-3 uppercase text-[10px] font-bold text-muted-foreground">{g.gradeType}</td>
-                          <td className="p-3 font-bold text-emerald-600">{g.score} / {g.maxScore}</td>
-                          <td className="p-3 text-muted-foreground">{g.feedback || '-'}</td>
-                        </tr>
-                      ))
+                      classAssignments.map((a) => {
+                        const sub = submittedList[a.id];
+                        const isGraded = sub && sub.grade !== undefined && sub.grade !== null;
+                        const isSubmitted = !!sub;
+
+                        return (
+                          <tr key={a.id} className="hover:bg-muted/30">
+                            <td className="p-3 font-bold text-foreground">
+                              <div>{a.title}</div>
+                              <div className="text-[11px] font-normal text-muted-foreground">Tenggat: {a.dueDate}</div>
+                            </td>
+                            <td className="p-3">
+                              {isGraded ? (
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                                  ✓ Sudah Dinilai
+                                </span>
+                              ) : isSubmitted ? (
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                                  Sudah Dikumpulkan (Menunggu Penilaian)
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                                  Belum Dikumpulkan
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 font-bold">
+                              {isGraded ? (
+                                <span className="text-emerald-600 text-sm font-extrabold">{sub.grade} / {a.maxScore || 100}</span>
+                              ) : (
+                                <span className="text-muted-foreground font-normal">-</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-muted-foreground">
+                              {isGraded ? (
+                                <span className="font-semibold text-foreground">{sub.feedback || 'Tidak ada catatan khusus dari Guru.'}</span>
+                              ) : isSubmitted ? (
+                                <span className="italic text-blue-600">Tugas terkirim. Menunggu pemeriksaan Guru.</span>
+                              ) : (
+                                <span className="italic text-muted-foreground">Belum ada pengumpulan.</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

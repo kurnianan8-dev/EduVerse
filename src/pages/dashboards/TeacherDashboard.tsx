@@ -87,12 +87,14 @@ interface AssignmentItem {
 interface SubmissionItem {
   id: string;
   assignmentId: string;
+  assignmentTitle?: string;
   studentId: string;
   studentName: string;
   avatarUrl?: string;
   fileUrl: string;
   notes: string;
   grade?: number;
+  maxScore?: number;
   feedback?: string;
   submittedAt: string;
 }
@@ -259,23 +261,31 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
+      const assMap: Record<string, any> = {};
+      if (assData) {
+        assData.forEach((a: any) => { assMap[a.id] = a; });
+      }
+
       // 3. Submissions with Real Student Profiles
       const { data: subData } = await supabase.from('submissions').select('*').order('submitted_at', { ascending: false });
       if (subData) {
         setSubmissions(
           subData.map((s: any) => {
             const prof = profilesMap[s.student_id];
+            const ass = assMap[s.assignment_id];
             return {
               id: s.id,
               assignmentId: s.assignment_id,
+              assignmentTitle: ass?.title || 'Tugas Kelas',
               studentId: s.student_id,
               studentName: prof ? (prof.full_name || prof.email) : `Siswa (${s.student_id?.slice(0, 8) || ''})`,
               avatarUrl: prof?.avatar_url,
               fileUrl: s.file_url,
-              notes: s.notes || '',
-              grade: s.grade,
+              notes: s.file_name ? `Berkas: ${s.file_name}` : '',
+              grade: s.score !== null && s.score !== undefined ? s.score : s.grade,
+              maxScore: ass?.max_score || 100,
               feedback: s.feedback || '',
-              submittedAt: new Date(s.submitted_at).toLocaleDateString('id-ID'),
+              submittedAt: new Date(s.submitted_at).toLocaleString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
             };
           })
         );
@@ -936,19 +946,43 @@ export const TeacherDashboard: React.FC = () => {
     e.preventDefault();
     if (!selectedSubmission || gradeInput === '') return;
 
+    const numGrade = Number(gradeInput);
+    const maxScore = selectedSubmission.maxScore || 100;
+
+    if (isNaN(numGrade) || numGrade < 0) {
+      alert('❌ Nilai tidak boleh kurang dari 0!');
+      return;
+    }
+
+    if (numGrade > maxScore) {
+      alert(`❌ Nilai (${numGrade}) tidak boleh melebihi nilai maksimal (${maxScore})!`);
+      return;
+    }
+
     try {
-      await (supabase as any)
+      const { error } = await (supabase as any)
         .from('submissions')
-        .update({ grade: Number(gradeInput), feedback: feedbackInput })
+        .update({
+          score: numGrade,
+          grade: numGrade,
+          feedback: feedbackInput || '',
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', selectedSubmission.id);
+
+      if (error) {
+        console.error('❌ [Teacher Grade Error]:', error);
+        alert(`Gagal menyimpan nilai: ${error.message}`);
+        return;
+      }
 
       setSubmissions((prev) =>
         prev.map((s) =>
-          s.id === selectedSubmission.id ? { ...s, grade: Number(gradeInput), feedback: feedbackInput } : s
+          s.id === selectedSubmission.id ? { ...s, grade: numGrade, feedback: feedbackInput } : s
         )
       );
 
-      alert(`✅ Nilai ${gradeInput} berhasil disimpan untuk ${selectedSubmission.studentName}!`);
+      alert(`✅ Nilai ${numGrade} / ${maxScore} berhasil disimpan untuk ${selectedSubmission.studentName}!`);
       setSelectedSubmission(null);
       setGradeInput('');
       setFeedbackInput('');
@@ -1268,16 +1302,19 @@ export const TeacherDashboard: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 3: TUGAS & SUBMISSIONS (Terisolasi per Class ID) */}
+          {/* TAB 3: TUGAS & PENILAIAN SISWA (Terisolasi per Class ID) */}
           {classTab === 'tugas' && (
-            <div className="space-y-6">
+            <div className="space-y-6 text-left">
               <div className="flex items-center justify-between p-4 rounded-2xl bg-card border border-border">
-                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-teal-600" /> Daftar Tugas & Penilaian ({classAssignments.length})
-                </h3>
+                <div>
+                  <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-teal-600" /> Daftar Tugas & Penilaian Kelas ({classAssignments.length})
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Kelola tugas, periksa pengumpulan berkas siswa, dan masukkan nilai & feedback.</p>
+                </div>
                 <button
                   onClick={() => setShowAssignmentModal(true)}
-                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer transition-all"
+                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer transition-all shrink-0"
                 >
                   <Plus className="w-4 h-4" /> + Buat Tugas Baru
                 </button>
@@ -1294,77 +1331,166 @@ export const TeacherDashboard: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                classAssignments.map((a) => (
-                  <div key={a.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-base text-foreground">{a.title}</h4>
-                      <span className="px-3 py-1 rounded-full text-xs font-bold bg-teal-500/10 text-teal-600 border border-teal-500/20">
-                        Maksimal: {a.maxScore || 100} Poin
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">{a.description}</p>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground border-t border-border pt-3">
-                      <span>Tenggat: <strong>{a.dueDate}</strong></span>
-                    </div>
-                  </div>
-                ))
-              )}
+                classAssignments.map((a) => {
+                  // Find all submissions for this assignment
+                  const assSubmissions = submissions.filter((s) => String(s.assignmentId).trim().toLowerCase() === String(a.id).trim().toLowerCase());
+                  const subMap = new Map(assSubmissions.map((s) => [String(s.studentId).trim().toLowerCase(), s]));
 
-              {/* Submissions Section */}
-              <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4">
-                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                  <Star className="w-5 h-5 text-amber-500" /> Jawaban & Penilaian Siswa ({submissions.length})
-                </h3>
+                  const submittedCount = enrolledStudents.filter((st) => subMap.has(String(st.id).trim().toLowerCase())).length;
+                  const unsubmittedCount = Math.max(0, enrolledStudents.length - submittedCount);
+                  const gradedCount = assSubmissions.filter((s) => s.grade !== undefined && s.grade !== null).length;
 
-                <div className="space-y-3">
-                  {submissions.length === 0 ? (
-                    <p className="text-xs text-muted-foreground italic py-2">Belum ada pengumpulan jawaban tugas dari siswa.</p>
-                  ) : (
-                    submissions.map((sub) => (
-                      <div key={sub.id} className="p-4 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <UserAvatar src={sub.avatarUrl} name={sub.studentName} size="md" />
-                          <div>
-                            <h4 className="font-bold text-sm text-foreground">{sub.studentName}</h4>
-                            <p className="text-xs text-muted-foreground">Dikirim: {sub.submittedAt} • Catatan: {sub.notes || '-'}</p>
-                            {sub.grade !== undefined && sub.grade !== null ? (
-                              <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-500 mt-1">
-                                Nilai: {sub.grade} / 100 {sub.feedback ? `• Komentar: "${sub.feedback}"` : ''}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[10px] text-amber-500 font-bold mt-1">
-                                Belum Dinilai
-                              </span>
-                            )}
-                          </div>
+                  return (
+                    <div key={a.id} className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
+                        <div>
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-teal-500/10 text-teal-600 border border-teal-500/20">
+                            Maksimal: {a.maxScore || 100} Poin
+                          </span>
+                          <h4 className="font-bold text-lg text-foreground mt-1">{a.title}</h4>
+                          <p className="text-xs text-muted-foreground">{a.description}</p>
+                          <p className="text-xs text-amber-600 font-semibold mt-1">Tenggat Waktu: {a.dueDate}</p>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          <a
-                            href={sub.fileUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="p-2 rounded-lg bg-accent hover:bg-muted text-foreground transition-colors cursor-pointer"
-                            title="Unduh Jawaban Siswa"
-                          >
-                            <Download className="w-4 h-4" />
-                          </a>
-                          <button
-                            onClick={() => {
-                              setSelectedSubmission(sub);
-                              setGradeInput(sub.grade !== undefined ? sub.grade : '');
-                              setFeedbackInput(sub.feedback || '');
-                            }}
-                            className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow flex items-center gap-1 cursor-pointer"
-                          >
-                            <Star className="w-3.5 h-3.5" /> Beri Nilai
-                          </button>
+                        {/* Summary Badges */}
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="px-3 py-1.5 rounded-xl font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                            Sudah Mengumpulkan: {submittedCount}
+                          </span>
+                          <span className="px-3 py-1.5 rounded-xl font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                            Belum Mengumpulkan: {unsubmittedCount}
+                          </span>
+                          <span className="px-3 py-1.5 rounded-xl font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                            Sudah Dinilai: {gradedCount}
+                          </span>
                         </div>
                       </div>
-                    ))
-                  )}
-                </div>
-              </div>
+
+                      {/* Student Submissions Table */}
+                      <div className="space-y-2">
+                        <h5 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+                          <Users className="w-4 h-4 text-teal-600" /> Daftar Siswa Terdaftar & Status Pengumpulan ({enrolledStudents.length})
+                        </h5>
+
+                        {enrolledStudents.length === 0 ? (
+                          <p className="text-xs text-muted-foreground italic p-4 text-center bg-muted/30 rounded-2xl border border-border">
+                            Belum ada siswa bergabung ke kelas ini.
+                          </p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                                <tr>
+                                  <th className="p-3">Siswa</th>
+                                  <th className="p-3">Status Pengumpulan</th>
+                                  <th className="p-3">Waktu & Berkas Jawaban</th>
+                                  <th className="p-3">Nilai</th>
+                                  <th className="p-3">Feedback Guru</th>
+                                  <th className="p-3 text-right">Aksi</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {enrolledStudents.map((st) => {
+                                  const sub = subMap.get(String(st.id).trim().toLowerCase());
+                                  const isGraded = sub && sub.grade !== undefined && sub.grade !== null;
+                                  const isSubmitted = !!sub;
+
+                                  return (
+                                    <tr key={st.id} className="hover:bg-muted/30">
+                                      <td className="p-3">
+                                        <div className="flex items-center gap-2.5">
+                                          <UserAvatar src={st.avatarUrl} name={st.fullName} size="sm" />
+                                          <div>
+                                            <p className="font-bold text-foreground">{st.fullName}</p>
+                                            <p className="text-[11px] text-muted-foreground">{st.email}</p>
+                                          </div>
+                                        </div>
+                                      </td>
+                                      <td className="p-3">
+                                        {isGraded ? (
+                                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                                            ✓ Sudah Dinilai
+                                          </span>
+                                        ) : isSubmitted ? (
+                                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                                            Sudah Mengumpulkan
+                                          </span>
+                                        ) : (
+                                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                                            Belum Mengumpulkan
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-muted-foreground">
+                                        {sub ? (
+                                          <div className="space-y-0.5">
+                                            <span className="block text-[11px] text-muted-foreground">{sub.submittedAt}</span>
+                                            <a
+                                              href={sub.fileUrl}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="inline-flex items-center gap-1 font-bold text-blue-600 hover:underline"
+                                            >
+                                              <Download className="w-3 h-3" /> Unduh Berkas
+                                            </a>
+                                          </div>
+                                        ) : (
+                                          <span className="italic text-muted-foreground">-</span>
+                                        )}
+                                      </td>
+                                      <td className="p-3">
+                                        {isGraded ? (
+                                          <span className="font-extrabold text-emerald-600 text-sm">
+                                            {sub.grade} / {a.maxScore || 100}
+                                          </span>
+                                        ) : (
+                                          <span className="text-muted-foreground">-</span>
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-muted-foreground max-w-xs truncate">
+                                        {sub?.feedback ? (
+                                          <span className="text-foreground italic">"{sub.feedback}"</span>
+                                        ) : (
+                                          '-'
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-right">
+                                        {isSubmitted ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedSubmission({
+                                                ...sub,
+                                                maxScore: a.maxScore || 100,
+                                                assignmentTitle: a.title,
+                                              });
+                                              setGradeInput(sub.grade !== undefined ? sub.grade : '');
+                                              setFeedbackInput(sub.feedback || '');
+                                            }}
+                                            className={`px-3 py-1.5 rounded-xl font-bold text-xs shadow inline-flex items-center gap-1 cursor-pointer transition-all ${
+                                              isGraded
+                                                ? 'bg-amber-600/10 text-amber-600 hover:bg-amber-600 hover:text-white border border-amber-500/30'
+                                                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                            }`}
+                                          >
+                                            <Star className="w-3.5 h-3.5" /> {isGraded ? 'Edit Nilai' : 'Beri Nilai'}
+                                          </button>
+                                        ) : (
+                                          <span className="text-[11px] text-muted-foreground italic">Menunggu Berkas</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           )}
 
