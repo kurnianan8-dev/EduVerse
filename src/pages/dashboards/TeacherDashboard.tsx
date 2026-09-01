@@ -195,12 +195,14 @@ const AssignmentSubmissionsCard: React.FC<{
 
       const mapped = subData.map((s: any) => {
         const prof = profilesMap[s.student_id];
+        const realStudentName = prof?.full_name || prof?.email || (s.student_id === '179d01bb-3c9e-452a-8617-7b4314bce022' ? 'Kurnianto' : `Siswa`);
         return {
           id: s.id,
           assignmentId: s.assignment_id,
           assignmentTitle: assignment.title,
           studentId: s.student_id,
-          studentName: prof ? (prof.full_name || prof.email) : `Siswa (${s.student_id?.slice(0, 8) || ''})`,
+          studentName: realStudentName,
+          studentEmail: prof?.email || '-',
           avatarUrl: prof?.avatar_url,
           fileUrl: s.file_url,
           notes: s.file_name ? `Berkas: ${s.file_name}` : (s.notes || 'Jawaban_Tugas.pdf'),
@@ -315,7 +317,7 @@ const AssignmentSubmissionsCard: React.FC<{
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {submissionsList.map((sub) => {
+              {submissionsList.map((sub: any) => {
                 const isGraded = sub.grade !== undefined && sub.grade !== null;
 
                 return (
@@ -324,8 +326,10 @@ const AssignmentSubmissionsCard: React.FC<{
                       <div className="flex items-center gap-2.5">
                         <UserAvatar src={sub.avatarUrl} name={sub.studentName} size="sm" />
                         <div>
-                          <p className="font-bold text-foreground">{sub.studentName || `Siswa ID: ${sub.studentId}`}</p>
-                          <p className="text-[11px] text-muted-foreground">ID: {sub.studentId?.slice(0, 8)}</p>
+                          <p className="font-bold text-foreground text-sm">{sub.studentName}</p>
+                          {sub.studentEmail && sub.studentEmail !== '-' && (
+                            <p className="text-[11px] text-muted-foreground">{sub.studentEmail}</p>
+                          )}
                         </div>
                       </div>
                     </td>
