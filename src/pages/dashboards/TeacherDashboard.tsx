@@ -32,6 +32,7 @@ import {
   Info,
   Check,
   Search,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -126,6 +127,275 @@ interface EnrolledStudent {
   jurusan?: string;
   joinedAt: string;
 }
+
+// Dedicated Submissions Card with direct per-assignment database query and error handling
+const AssignmentSubmissionsCard: React.FC<{
+  assignment: AssignmentItem;
+  enrolledStudents: EnrolledStudent[];
+  onGradeClick: (submission: SubmissionItem) => void;
+}> = ({ assignment, enrolledStudents, onGradeClick }) => {
+  const { user } = useAuth();
+  const [submissionsList, setSubmissionsList] = useState<SubmissionItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const fetchSubmissionsDirectly = async () => {
+    setIsLoading(true);
+    setFetchError(null);
+    try {
+      const { data: subData, error: subErr } = await supabase
+        .from('submissions')
+        .select(`
+          id,
+          assignment_id,
+          student_id,
+          file_url,
+          file_name,
+          submitted_at,
+          score,
+          grade,
+          feedback,
+          updated_at
+        `)
+        .eq('assignment_id', assignment.id);
+
+      console.log('========== REAL TEACHER FORENSIC LOGS ==========');
+      console.log('[A] assignments from DB', [assignment]);
+      console.log('[B] assignment IDs', [assignment.id]);
+      console.log('[C] raw submissions from DB', subData);
+      console.log('[D] submissionsList BEFORE SET STATE', subData);
+      console.log('================================================');
+
+      if (subErr) {
+        console.error('❌ [TEACHER SUBMISSIONS ERROR]:', subErr);
+        setFetchError(subErr.message || 'Gagal mengambil data pengumpulan tugas dari Supabase Database.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (!subData || subData.length === 0) {
+        console.log('[E] submissionsList AFTER STATE', []);
+        console.log('[F] selected assignment', assignment);
+        console.log('[G] submissions passed to card', []);
+        console.log('[H] final rendered submission count', 0);
+        setSubmissionsList([]);
+        setIsLoading(false);
+        return;
+      }
+
+      // Fetch student profiles for submitted student IDs
+      const studentIds = Array.from(new Set(subData.map((s: any) => s.student_id).filter(Boolean)));
+      let profilesMap: Record<string, any> = {};
+      if (studentIds.length > 0) {
+        const { data: profs } = await supabase.from('profiles').select('*').in('id', studentIds);
+        if (profs) {
+          profs.forEach((p: any) => { profilesMap[p.id] = p; });
+        }
+      }
+
+      const mapped = subData.map((s: any) => {
+        const prof = profilesMap[s.student_id];
+        return {
+          id: s.id,
+          assignmentId: s.assignment_id,
+          assignmentTitle: assignment.title,
+          studentId: s.student_id,
+          studentName: prof ? (prof.full_name || prof.email) : `Siswa (${s.student_id?.slice(0, 8) || ''})`,
+          avatarUrl: prof?.avatar_url,
+          fileUrl: s.file_url,
+          notes: s.file_name ? `Berkas: ${s.file_name}` : (s.notes || 'Jawaban_Tugas.pdf'),
+          grade: s.score !== null && s.score !== undefined ? s.score : s.grade,
+          maxScore: assignment.maxScore || 100,
+          feedback: s.feedback || '',
+          submittedAt: new Date(s.submitted_at).toLocaleString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        };
+      });
+
+      console.log('[E] submissionsList AFTER STATE', mapped);
+      console.log('[F] selected assignment', assignment);
+      console.log('[G] submissions passed to card', mapped);
+      console.log('[H] final rendered submission count', mapped.length);
+
+      setSubmissionsList(mapped);
+    } catch (err: any) {
+      console.error('❌ Exception in fetchSubmissionsDirectly:', err);
+      setFetchError(err.message || 'Terjadi kesalahan sistem saat membaca data pengumpulan.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (assignment?.id) {
+      fetchSubmissionsDirectly();
+    }
+  }, [assignment?.id]);
+
+  // Calculate counts directly from submissionsList (independent of enrolledStudents)
+  const rows = Array.isArray(submissionsList) ? submissionsList : [];
+  const submittedCount = rows.length;
+  const gradedCount = rows.filter((s) => s.grade !== undefined && s.grade !== null).length;
+  const unsubmittedCount = Math.max(0, (enrolledStudents?.length || 0) - submittedCount);
+
+  console.log('========== ACTUAL CARD RENDER ==========');
+  console.log('assignment.id:', assignment?.id);
+  console.log('assignment.title:', assignment?.title);
+  console.log('submissions prop:', submissionsList);
+  console.log('submissions.length:', submissionsList?.length);
+  console.log('submittedCount:', submittedCount);
+  console.log('gradedCount:', gradedCount);
+  console.log('unsubmittedCount:', unsubmittedCount);
+  console.log('enrolledStudents.length:', enrolledStudents?.length);
+  console.log('========================================');
+
+  return (
+    <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-600 text-white shadow-sm border border-emerald-400 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-yellow-300" /> TEACHER SUBMISSION FIX v2
+            </span>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-teal-500/10 text-teal-600 border border-teal-500/20">
+              Maksimal: {assignment.maxScore || 100} Poin
+            </span>
+          </div>
+          <h4 className="font-bold text-lg text-foreground mt-1">{assignment.title}</h4>
+          <p className="text-xs text-muted-foreground">{assignment.description}</p>
+          <p className="text-xs text-amber-600 font-semibold mt-1">Tenggat Waktu: {assignment.dueDate}</p>
+        </div>
+
+        {/* Summary Badges */}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="px-3 py-1.5 rounded-xl font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+            Sudah Mengumpulkan: {submittedCount}
+          </span>
+          <span className="px-3 py-1.5 rounded-xl font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+            Belum Mengumpulkan: {unsubmittedCount}
+          </span>
+          <span className="px-3 py-1.5 rounded-xl font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+            Sudah Dinilai: {gradedCount}
+          </span>
+          <button
+            onClick={fetchSubmissionsDirectly}
+            className="p-1.5 rounded-lg bg-muted hover:bg-accent text-foreground transition-all cursor-pointer flex items-center gap-1 text-[11px] font-bold"
+            title="Refresh Data Pengumpulan"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Error Message */}
+      {fetchError && (
+        <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-600 text-xs space-y-1">
+          <p className="font-bold">❌ Gagal Mengambil Data Submission:</p>
+          <p>{fetchError}</p>
+        </div>
+      )}
+
+      {/* Loading & Submissions List */}
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground italic p-4 text-center">Memuat data pengumpulan tugas...</p>
+      ) : submissionsList.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic p-4 text-center bg-muted/30 rounded-2xl border border-border">
+          Belum ada siswa mengumpulkan tugas ini.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+              <tr>
+                <th className="p-3">Siswa</th>
+                <th className="p-3">Status Pengumpulan</th>
+                <th className="p-3">Waktu & Berkas Jawaban</th>
+                <th className="p-3">Nilai</th>
+                <th className="p-3">Feedback Guru</th>
+                <th className="p-3 text-right">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {submissionsList.map((sub) => {
+                const isGraded = sub.grade !== undefined && sub.grade !== null;
+
+                return (
+                  <tr key={sub.id} className="hover:bg-muted/30">
+                    <td className="p-3">
+                      <div className="flex items-center gap-2.5">
+                        <UserAvatar src={sub.avatarUrl} name={sub.studentName} size="sm" />
+                        <div>
+                          <p className="font-bold text-foreground">{sub.studentName || `Siswa ID: ${sub.studentId}`}</p>
+                          <p className="text-[11px] text-muted-foreground">ID: {sub.studentId?.slice(0, 8)}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      {isGraded ? (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                          ✓ Sudah Dinilai
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                          Sudah Mengumpulkan
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-3 text-muted-foreground">
+                      <div className="space-y-0.5">
+                        <span className="block text-[11px] text-muted-foreground">{sub.submittedAt}</span>
+                        {sub.fileUrl ? (
+                          <a
+                            href={sub.fileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 font-bold text-blue-600 hover:underline"
+                          >
+                            <Download className="w-3 h-3" /> Unduh / Lihat Berkas
+                          </a>
+                        ) : (
+                          <span className="italic text-muted-foreground">Tidak Ada File</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      {isGraded ? (
+                        <span className="font-extrabold text-emerald-600 text-sm">
+                          {sub.grade} / {assignment.maxScore || 100}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </td>
+                    <td className="p-3 text-muted-foreground max-w-xs truncate">
+                      {sub.feedback ? (
+                        <span className="text-foreground italic">"{sub.feedback}"</span>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
+                    <td className="p-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => onGradeClick(sub)}
+                        className={`px-3 py-1.5 rounded-xl font-bold text-xs shadow inline-flex items-center gap-1 cursor-pointer transition-all ${
+                          isGraded
+                            ? 'bg-amber-600/10 text-amber-600 hover:bg-amber-600 hover:text-white border border-amber-500/30'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                        }`}
+                      >
+                        <Star className="w-3.5 h-3.5" /> {isGraded ? 'Edit Nilai' : 'Beri Nilai'}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const TeacherDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -377,33 +647,102 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Fetch enrolled students & announcements for a specific class
+  // Fetch enrolled students, assignments, submissions & announcements for a specific class
   const fetchClassDetails = async (classId: string) => {
     try {
-      // 1. Fetch Enrolled Students
-      const { data: enrollData } = await supabase.from('enrollments').select('student_id, enrolled_at').eq('class_id', classId);
-      if (enrollData && enrollData.length > 0) {
-        const studentIds = enrollData.map((e: any) => e.student_id).filter(Boolean);
-        const { data: studentProfiles } = await supabase.from('profiles').select('*').in('id', studentIds);
+      // 1. Fetch Enrolled Students (support student_id & user_id)
+      const { data: enrollData } = await supabase.from('enrollments').select('*').eq('class_id', classId);
+      const studentIdsFromEnroll = enrollData ? enrollData.map((e: any) => e.student_id || e.user_id).filter(Boolean) : [];
 
-        if (studentProfiles) {
-          const enrollMap = new Map(enrollData.map((e: any) => [e.student_id, e.enrolled_at]));
-          setEnrolledStudents(
-            studentProfiles.map((p: any) => ({
-              id: p.id,
-              fullName: p.full_name || p.email,
-              email: p.email,
-              avatarUrl: p.avatar_url,
-              jurusan: p.jurusan || 'Umum',
-              joinedAt: new Date(enrollMap.get(p.id) || Date.now()).toLocaleDateString('id-ID'),
-            }))
-          );
+      // 2. Fetch Assignments & Submissions for this Class
+      const { data: assInClass } = await supabase.from('assignments').select('*').eq('class_id', classId);
+      const assIdsInClass = assInClass ? assInClass.map((a: any) => a.id) : [];
+      const assMap: Record<string, any> = {};
+      if (assInClass) {
+        assInClass.forEach((a: any) => { assMap[a.id] = a; });
+      }
+
+      let subInClass: any[] = [];
+      let studentIdsFromSub: string[] = [];
+      if (assIdsInClass.length > 0) {
+        const { data: sData, error: sErr } = await supabase
+          .from('submissions')
+          .select('*')
+          .in('assignment_id', assIdsInClass)
+          .order('submitted_at', { ascending: false });
+
+        if (sData && !sErr) {
+          subInClass = sData;
+          studentIdsFromSub = sData.map((s: any) => s.student_id).filter(Boolean);
+        } else if (sErr) {
+          console.warn('⚠️ [Teacher fetchClassDetails Submissions Error]:', sErr.message);
         }
+      }
+
+      // Combine all unique student IDs (from enrollments and submissions)
+      const allStudentIds = Array.from(new Set([...studentIdsFromEnroll, ...studentIdsFromSub]));
+
+      // 3. Resolve Student Profiles
+      let profilesMap: Record<string, any> = {};
+      if (allStudentIds.length > 0) {
+        const { data: studentProfiles } = await supabase.from('profiles').select('*').in('id', allStudentIds);
+        if (studentProfiles) {
+          studentProfiles.forEach((p: any) => {
+            profilesMap[p.id] = p;
+          });
+        }
+      }
+
+      // Set Enrolled Students State
+      if (enrollData && enrollData.length > 0) {
+        const enrollMap = new Map(enrollData.map((e: any) => [e.student_id || e.user_id, e.enrolled_at || e.created_at]));
+        setEnrolledStudents(
+          studentIdsFromEnroll.map((sid: string) => {
+            const p = profilesMap[sid];
+            return {
+              id: sid,
+              fullName: p?.full_name || p?.email || `Siswa (${sid.slice(0, 8)})`,
+              email: p?.email || '-',
+              avatarUrl: p?.avatar_url,
+              jurusan: p?.jurusan || 'Umum',
+              joinedAt: new Date(enrollMap.get(sid) || Date.now()).toLocaleDateString('id-ID'),
+            };
+          })
+        );
       } else {
         setEnrolledStudents([]);
       }
 
-      // 2. Fetch Announcements
+      // Update Submissions State for this Class
+      if (subInClass.length > 0) {
+        const mappedSubmissions = subInClass.map((s: any) => {
+          const prof = profilesMap[s.student_id];
+          const ass = assMap[s.assignment_id];
+          return {
+            id: s.id,
+            assignmentId: s.assignment_id,
+            assignmentTitle: ass?.title || 'Tugas Kelas',
+            studentId: s.student_id,
+            studentName: prof ? (prof.full_name || prof.email) : `Siswa (${s.student_id?.slice(0, 8) || ''})`,
+            avatarUrl: prof?.avatar_url,
+            fileUrl: s.file_url,
+            notes: s.file_name ? `Berkas: ${s.file_name}` : (s.notes || ''),
+            grade: s.score !== null && s.score !== undefined ? s.score : s.grade,
+            maxScore: ass?.max_score || 100,
+            feedback: s.feedback || '',
+            submittedAt: new Date(s.submitted_at).toLocaleString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+          };
+        });
+
+        setSubmissions((prev) => {
+          // Merge newly fetched class submissions with previous state
+          const prevMap = new Map(prev.map((item) => [item.id, item]));
+          mappedSubmissions.forEach((item) => prevMap.set(item.id, item));
+          return Array.from(prevMap.values());
+        });
+      }
+
+      // 4. Fetch Announcements
       const { data: annData } = await supabase.from('announcements').select('*').eq('class_id', classId).order('created_at', { ascending: false });
       if (annData) {
         setAnnouncements(
@@ -1331,165 +1670,18 @@ export const TeacherDashboard: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                classAssignments.map((a) => {
-                  // Find all submissions for this assignment
-                  const assSubmissions = submissions.filter((s) => String(s.assignmentId).trim().toLowerCase() === String(a.id).trim().toLowerCase());
-                  const subMap = new Map(assSubmissions.map((s) => [String(s.studentId).trim().toLowerCase(), s]));
-
-                  const submittedCount = enrolledStudents.filter((st) => subMap.has(String(st.id).trim().toLowerCase())).length;
-                  const unsubmittedCount = Math.max(0, enrolledStudents.length - submittedCount);
-                  const gradedCount = assSubmissions.filter((s) => s.grade !== undefined && s.grade !== null).length;
-
-                  return (
-                    <div key={a.id} className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
-                        <div>
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-teal-500/10 text-teal-600 border border-teal-500/20">
-                            Maksimal: {a.maxScore || 100} Poin
-                          </span>
-                          <h4 className="font-bold text-lg text-foreground mt-1">{a.title}</h4>
-                          <p className="text-xs text-muted-foreground">{a.description}</p>
-                          <p className="text-xs text-amber-600 font-semibold mt-1">Tenggat Waktu: {a.dueDate}</p>
-                        </div>
-
-                        {/* Summary Badges */}
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="px-3 py-1.5 rounded-xl font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
-                            Sudah Mengumpulkan: {submittedCount}
-                          </span>
-                          <span className="px-3 py-1.5 rounded-xl font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
-                            Belum Mengumpulkan: {unsubmittedCount}
-                          </span>
-                          <span className="px-3 py-1.5 rounded-xl font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                            Sudah Dinilai: {gradedCount}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Student Submissions Table */}
-                      <div className="space-y-2">
-                        <h5 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5">
-                          <Users className="w-4 h-4 text-teal-600" /> Daftar Siswa Terdaftar & Status Pengumpulan ({enrolledStudents.length})
-                        </h5>
-
-                        {enrolledStudents.length === 0 ? (
-                          <p className="text-xs text-muted-foreground italic p-4 text-center bg-muted/30 rounded-2xl border border-border">
-                            Belum ada siswa bergabung ke kelas ini.
-                          </p>
-                        ) : (
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-left text-xs">
-                              <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                                <tr>
-                                  <th className="p-3">Siswa</th>
-                                  <th className="p-3">Status Pengumpulan</th>
-                                  <th className="p-3">Waktu & Berkas Jawaban</th>
-                                  <th className="p-3">Nilai</th>
-                                  <th className="p-3">Feedback Guru</th>
-                                  <th className="p-3 text-right">Aksi</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {enrolledStudents.map((st) => {
-                                  const sub = subMap.get(String(st.id).trim().toLowerCase());
-                                  const isGraded = sub && sub.grade !== undefined && sub.grade !== null;
-                                  const isSubmitted = !!sub;
-
-                                  return (
-                                    <tr key={st.id} className="hover:bg-muted/30">
-                                      <td className="p-3">
-                                        <div className="flex items-center gap-2.5">
-                                          <UserAvatar src={st.avatarUrl} name={st.fullName} size="sm" />
-                                          <div>
-                                            <p className="font-bold text-foreground">{st.fullName}</p>
-                                            <p className="text-[11px] text-muted-foreground">{st.email}</p>
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="p-3">
-                                        {isGraded ? (
-                                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                                            ✓ Sudah Dinilai
-                                          </span>
-                                        ) : isSubmitted ? (
-                                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
-                                            Sudah Mengumpulkan
-                                          </span>
-                                        ) : (
-                                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
-                                            Belum Mengumpulkan
-                                          </span>
-                                        )}
-                                      </td>
-                                      <td className="p-3 text-muted-foreground">
-                                        {sub ? (
-                                          <div className="space-y-0.5">
-                                            <span className="block text-[11px] text-muted-foreground">{sub.submittedAt}</span>
-                                            <a
-                                              href={sub.fileUrl}
-                                              target="_blank"
-                                              rel="noreferrer"
-                                              className="inline-flex items-center gap-1 font-bold text-blue-600 hover:underline"
-                                            >
-                                              <Download className="w-3 h-3" /> Unduh Berkas
-                                            </a>
-                                          </div>
-                                        ) : (
-                                          <span className="italic text-muted-foreground">-</span>
-                                        )}
-                                      </td>
-                                      <td className="p-3">
-                                        {isGraded ? (
-                                          <span className="font-extrabold text-emerald-600 text-sm">
-                                            {sub.grade} / {a.maxScore || 100}
-                                          </span>
-                                        ) : (
-                                          <span className="text-muted-foreground">-</span>
-                                        )}
-                                      </td>
-                                      <td className="p-3 text-muted-foreground max-w-xs truncate">
-                                        {sub?.feedback ? (
-                                          <span className="text-foreground italic">"{sub.feedback}"</span>
-                                        ) : (
-                                          '-'
-                                        )}
-                                      </td>
-                                      <td className="p-3 text-right">
-                                        {isSubmitted ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              setSelectedSubmission({
-                                                ...sub,
-                                                maxScore: a.maxScore || 100,
-                                                assignmentTitle: a.title,
-                                              });
-                                              setGradeInput(sub.grade !== undefined ? sub.grade : '');
-                                              setFeedbackInput(sub.feedback || '');
-                                            }}
-                                            className={`px-3 py-1.5 rounded-xl font-bold text-xs shadow inline-flex items-center gap-1 cursor-pointer transition-all ${
-                                              isGraded
-                                                ? 'bg-amber-600/10 text-amber-600 hover:bg-amber-600 hover:text-white border border-amber-500/30'
-                                                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                            }`}
-                                          >
-                                            <Star className="w-3.5 h-3.5" /> {isGraded ? 'Edit Nilai' : 'Beri Nilai'}
-                                          </button>
-                                        ) : (
-                                          <span className="text-[11px] text-muted-foreground italic">Menunggu Berkas</span>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
+                classAssignments.map((a) => (
+                  <AssignmentSubmissionsCard
+                    key={a.id}
+                    assignment={a}
+                    enrolledStudents={enrolledStudents}
+                    onGradeClick={(sub) => {
+                      setSelectedSubmission(sub);
+                      setGradeInput(sub.grade !== undefined ? sub.grade : '');
+                      setFeedbackInput(sub.feedback || '');
+                    }}
+                  />
+                ))
               )}
             </div>
           )}
