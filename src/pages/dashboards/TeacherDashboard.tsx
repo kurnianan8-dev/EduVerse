@@ -133,7 +133,9 @@ const AssignmentSubmissionsCard: React.FC<{
   assignment: AssignmentItem;
   enrolledStudents: EnrolledStudent[];
   onGradeClick: (submission: SubmissionItem) => void;
-}> = ({ assignment, enrolledStudents, onGradeClick }) => {
+  onDeleteAssignment?: (assignment: AssignmentItem, submissionCount: number) => void;
+  isDeleting?: boolean;
+}> = ({ assignment, enrolledStudents, onGradeClick, onDeleteAssignment, isDeleting }) => {
   const { user } = useAuth();
   const [submissionsList, setSubmissionsList] = useState<SubmissionItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -267,7 +269,7 @@ const AssignmentSubmissionsCard: React.FC<{
           <p className="text-xs text-amber-600 font-semibold mt-1">Tenggat Waktu: {assignment.dueDate}</p>
         </div>
 
-        {/* Summary Badges */}
+        {/* Summary Badges & Action Buttons */}
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="px-3 py-1.5 rounded-xl font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
             Sudah Mengumpulkan: {submittedCount}
@@ -285,6 +287,16 @@ const AssignmentSubmissionsCard: React.FC<{
           >
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
           </button>
+          {onDeleteAssignment && (
+            <button
+              onClick={() => onDeleteAssignment(assignment, submittedCount)}
+              disabled={isDeleting}
+              className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-600 hover:text-white text-rose-500 font-bold text-xs shadow flex items-center gap-1 cursor-pointer transition-all disabled:opacity-50 border border-rose-500/20"
+              title="Hapus Tugas Ini"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> {isDeleting ? 'Menghapus...' : 'Hapus'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1267,6 +1279,108 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
+  const [deletingMaterialId, setDeletingMaterialId] = useState<string | null>(null);
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null);
+
+  // Helper function to safely extract path relative to bucket from Supabase Storage public URL
+  const getStorageFilePathFromUrl = (url: string | undefined | null, bucketName: string): string | null => {
+    if (!url || typeof url !== 'string') return null;
+    const pattern = new RegExp(`/storage/v1/object/public/${bucketName}/(.+)`, 'i');
+    const match = url.match(pattern);
+    if (match && match[1]) {
+      return decodeURIComponent(match[1].split('?')[0]);
+    }
+    return null;
+  };
+
+  // Delete Material Handler (Storage + Database)
+  const handleDeleteMaterial = async (material: MaterialItem) => {
+    const confirmMsg = `Apakah Anda yakin ingin menghapus materi "${material.title}"?\n\nFile materi juga akan dihapus dan siswa tidak dapat mengaksesnya lagi.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setDeletingMaterialId(material.id);
+
+    try {
+      // 1. Storage deletion if fileUrl belongs to bucket 'materials'
+      const storagePath = getStorageFilePathFromUrl(material.fileUrl, 'materials');
+      if (storagePath) {
+        console.log('📌 [Delete Material]: Removing Storage object from bucket "materials", path:', storagePath);
+        const { error: storageErr } = await supabase.storage.from('materials').remove([storagePath]);
+        if (storageErr) {
+          console.warn('⚠️ [Storage Delete Warning]:', storageErr.message);
+        }
+      }
+
+      // 2. Database deletion from public.materials
+      const { error: dbErr } = await (supabase as any)
+        .from('materials')
+        .delete()
+        .eq('id', material.id);
+
+      if (dbErr) {
+        console.error('❌ [Delete Material DB Error]:', dbErr);
+        alert(`Materi gagal dihapus: ${dbErr.message}`);
+        setDeletingMaterialId(null);
+        return;
+      }
+
+      // 3. Update local state
+      setMaterials((prev) => prev.filter((m) => m.id !== material.id));
+      alert(`✅ Materi "${material.title}" berhasil dihapus.`);
+    } catch (err: any) {
+      console.error('❌ [Delete Material Exception]:', err);
+      alert(`Materi gagal dihapus: ${err.message}`);
+    } finally {
+      setDeletingMaterialId(null);
+    }
+  };
+
+  // Delete Assignment Handler (Storage + Database with ON DELETE CASCADE for submissions)
+  const handleDeleteAssignment = async (assignment: AssignmentItem, submissionCount: number = 0) => {
+    let confirmMsg = `Apakah Anda yakin ingin menghapus tugas "${assignment.title}"?\n\nTugas dan file lampirannya akan dihapus.`;
+    if (submissionCount > 0) {
+      confirmMsg = `Perhatian: tugas "${assignment.title}" sudah memiliki ${submissionCount} pengumpulan siswa.\n\nJika dihapus, tugas dan pengumpulan terkait juga akan terhapus. Apakah Anda yakin ingin menghapus tugas ini?`;
+    }
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setDeletingAssignmentId(assignment.id);
+
+    try {
+      // 1. Storage attachment deletion if fileUrl exists in bucket 'materials'
+      const storagePath = getStorageFilePathFromUrl(assignment.fileUrl, 'materials');
+      if (storagePath) {
+        console.log('📌 [Delete Assignment]: Removing Storage attachment from bucket "materials", path:', storagePath);
+        const { error: storageErr } = await supabase.storage.from('materials').remove([storagePath]);
+        if (storageErr) {
+          console.warn('⚠️ [Storage Delete Warning]:', storageErr.message);
+        }
+      }
+
+      // 2. Database deletion from public.assignments (ON DELETE CASCADE for submissions)
+      const { error: dbErr } = await (supabase as any)
+        .from('assignments')
+        .delete()
+        .eq('id', assignment.id);
+
+      if (dbErr) {
+        console.error('❌ [Delete Assignment DB Error]:', dbErr);
+        alert(`Tugas gagal dihapus: ${dbErr.message}`);
+        setDeletingAssignmentId(null);
+        return;
+      }
+
+      // 3. Update local state
+      setAssignments((prev) => prev.filter((a) => a.id !== assignment.id));
+      alert(`✅ Tugas "${assignment.title}" berhasil dihapus.`);
+    } catch (err: any) {
+      console.error('❌ [Delete Assignment Exception]:', err);
+      alert(`Tugas gagal dihapus: ${err.message}`);
+    } finally {
+      setDeletingAssignmentId(null);
+    }
+  };
+
   // Remove Student from Class
   const handleRemoveStudentFromClass = async (studentId: string, studentName: string) => {
     if (!selectedClass) return;
@@ -1631,14 +1745,24 @@ export const TeacherDashboard: React.FC = () => {
                       <h4 className="font-bold text-base text-foreground">{m.title}</h4>
                       <p className="text-xs text-muted-foreground">{m.description || m.fileName}</p>
                     </div>
-                    <a
-                      href={m.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Download className="w-4 h-4" /> Unduh Berkas
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={m.fileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Download className="w-4 h-4" /> Unduh Berkas
+                      </a>
+                      <button
+                        onClick={() => handleDeleteMaterial(m)}
+                        disabled={deletingMaterialId === m.id}
+                        className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-600 hover:text-white text-rose-500 font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50 border border-rose-500/20"
+                        title="Hapus Materi Ini"
+                      >
+                        <Trash2 className="w-4 h-4" /> {deletingMaterialId === m.id ? 'Menghapus...' : 'Hapus'}
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -1684,6 +1808,8 @@ export const TeacherDashboard: React.FC = () => {
                       setGradeInput(sub.grade !== undefined ? sub.grade : '');
                       setFeedbackInput(sub.feedback || '');
                     }}
+                    onDeleteAssignment={(ass, count) => handleDeleteAssignment(ass, count)}
+                    isDeleting={deletingAssignmentId === a.id}
                   />
                 ))
               )}
