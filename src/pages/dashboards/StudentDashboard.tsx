@@ -150,7 +150,7 @@ export const StudentDashboard: React.FC = () => {
       ensureStudentQrCodeInSupabase();
       fetchStudentEnrolledClasses();
     }
-  }, [user?.id]);
+  }, [user?.id, selectedClass?.id, classWorkspaceTab]);
 
   const ensureStudentQrCodeInSupabase = async () => {
     if (!user?.id) return;
@@ -286,18 +286,19 @@ export const StudentDashboard: React.FC = () => {
       const { data: fullMats, error: matErr } = await materialsQuery;
 
       if (fullMats && !matErr) {
-        setMaterials(
-          fullMats.map((m: any) => ({
-            id: m.id,
-            classId: String(m.class_id || '').trim(),
-            title: m.title,
-            subject: 'Mata Pelajaran',
-            fileType: m.file_type || 'pdf',
-            fileUrl: m.file_url,
-            description: m.description || '',
-            createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
-          }))
-        );
+        const mappedMats = fullMats.map((m: any) => ({
+          id: m.id,
+          classId: String(m.class_id || '').trim(),
+          title: m.title,
+          subject: 'Mata Pelajaran',
+          fileType: m.file_type || 'pdf',
+          fileUrl: m.file_url,
+          description: m.description || '',
+          createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
+        }));
+        setMaterials(mappedMats);
+        console.log('[STUDENT MATERIALS]', mappedMats);
+        console.log('[STUDENT MATERIALS COUNT]', mappedMats.length);
       }
 
       if (classIds.length > 0) {
@@ -317,29 +318,32 @@ export const StudentDashboard: React.FC = () => {
         });
 
         if (fullAss && !assErr) {
-          setAssignments(
-            fullAss.map((a: any) => ({
-              id: a.id,
-              classId: String(a.class_id || '').trim(),
-              title: a.title,
-              subject: 'Mata Pelajaran',
-              dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
-              maxScore: a.max_score || 100,
-              status: submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan',
-              description: a.description || '',
-              attachmentUrl: a.attachment_url || a.file_url || '',
-              grade: submittedMap[a.id]?.grade,
-              feedback: submittedMap[a.id]?.feedback,
-              submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
-              submittedFileUrl: submittedMap[a.id]?.fileUrl,
-            }))
-          );
+          const mappedAss = fullAss.map((a: any) => ({
+            id: a.id,
+            classId: String(a.class_id || '').trim(),
+            title: a.title,
+            subject: 'Mata Pelajaran',
+            dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
+            maxScore: a.max_score || 100,
+            status: (submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan') as 'Belum Dikumpulkan' | 'Sudah Dikumpulkan',
+            description: a.description || '',
+            attachmentUrl: a.attachment_url || a.file_url || '',
+            grade: submittedMap[a.id]?.grade,
+            feedback: submittedMap[a.id]?.feedback,
+            submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
+            submittedFileUrl: submittedMap[a.id]?.fileUrl,
+          }));
+          setAssignments(mappedAss);
+          console.log('[STUDENT ASSIGNMENTS]', mappedAss);
+          console.log('[STUDENT ASSIGNMENTS COUNT]', mappedAss.length);
         } else if (assErr) {
           console.error('[Student Assignment Audit Error - Assignments]:', assErr);
         }
       } else {
         console.log('[Student Assignment Audit] classIds is empty. Skipping assignments query.');
         setAssignments([]);
+        console.log('[STUDENT ASSIGNMENTS]', []);
+        console.log('[STUDENT ASSIGNMENTS COUNT]', 0);
       }
 
       // 6. Fetch Announcements
@@ -638,15 +642,19 @@ export const StudentDashboard: React.FC = () => {
         }
       }
 
-      if (!finalFileUrl || finalFileUrl.startsWith('blob:')) {
-        alert('URL berkas jawaban tidak valid.');
+      // Verify active user session ID matching auth.uid() in JWT
+      const { data: authData } = await supabase.auth.getUser();
+      const currentStudentId = authData?.user?.id || user.id;
+
+      if (!currentStudentId) {
+        alert('Sesi login tidak valid. Silakan login ulang.');
         setIsSubmittingJoin(false);
         return;
       }
 
       console.log('📌 [Submission DB Upsert] Inserting submission into DB:', {
         assignment_id: selectedAssignment.id,
-        student_id: user.id,
+        student_id: currentStudentId,
         file_url: finalFileUrl,
         file_name: selectedSubmissionFile?.name || submissionFileName || 'jawaban.pdf',
       });
@@ -656,7 +664,7 @@ export const StudentDashboard: React.FC = () => {
         .upsert(
           {
             assignment_id: selectedAssignment.id,
-            student_id: user.id,
+            student_id: currentStudentId,
             file_url: finalFileUrl,
             file_name: selectedSubmissionFile?.name || submissionFileName || 'jawaban.pdf',
             submitted_at: new Date().toISOString(),
