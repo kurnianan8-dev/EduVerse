@@ -152,7 +152,11 @@ export const StudentDashboard: React.FC = () => {
     fetchStudentEnrolledClasses();
 
     const handleFocus = () => {
-      fetchStudentEnrolledClasses();
+      if (selectedClass?.id && classWorkspaceTab === 'tugas') {
+        fetchCurrentClassAssignments();
+      } else {
+        fetchStudentEnrolledClasses();
+      }
     };
 
     window.addEventListener('focus', handleFocus);
@@ -161,6 +165,78 @@ export const StudentDashboard: React.FC = () => {
       window.removeEventListener('focus', handleFocus);
     };
   }, [user?.id, selectedClass?.id, classWorkspaceTab]);
+
+  useEffect(() => {
+    if (!selectedClass?.id) return;
+    if (classWorkspaceTab !== 'tugas') return;
+
+    fetchCurrentClassAssignments();
+  }, [selectedClass?.id, classWorkspaceTab]);
+
+  const fetchCurrentClassAssignments = async () => {
+    if (!selectedClass?.id) {
+      setAssignments([]);
+      setSelectedAssignment(null);
+      return;
+    }
+
+    const currentClassId = selectedClass.id;
+    setAssignments([]);
+
+    const submittedMap: Record<string, { grade?: number; feedback?: string; fileUrl?: string; fileName?: string; submittedAt?: string }> = {};
+    if (user?.id) {
+      const { data: subData } = await supabase.from('submissions').select('*').eq('student_id', user.id);
+      if (subData) {
+        subData.forEach((s: any) => {
+          submittedMap[s.assignment_id] = {
+            grade: s.score !== null && s.score !== undefined ? s.score : s.grade,
+            feedback: s.feedback,
+            fileUrl: s.file_url,
+            fileName: s.file_name,
+            submittedAt: s.submitted_at,
+          };
+        });
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('assignments')
+      .select('*')
+      .eq('class_id', currentClassId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[CURRENT CLASS ASSIGNMENTS ERROR]', error);
+      setAssignments([]);
+      setSelectedAssignment(null);
+      return;
+    }
+
+    const mappedAss = (data ?? []).map((a: any) => ({
+      id: a.id,
+      classId: String(a.class_id || '').trim(),
+      title: a.title,
+      subject: 'Mata Pelajaran',
+      dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
+      maxScore: a.max_score || 100,
+      status: (submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan') as 'Belum Dikumpulkan' | 'Sudah Dikumpulkan',
+      description: a.description || '',
+      attachmentUrl: a.attachment_url || a.file_url || '',
+      grade: submittedMap[a.id]?.grade,
+      feedback: submittedMap[a.id]?.feedback,
+      submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
+      submittedFileUrl: submittedMap[a.id]?.fileUrl,
+    }));
+
+    setAssignments(mappedAss);
+
+    if (
+      selectedAssignment &&
+      !mappedAss.some((a: any) => a.id === selectedAssignment.id)
+    ) {
+      setSelectedAssignment(null);
+    }
+  };
 
   const ensureStudentQrCodeInSupabase = async () => {
     if (!user?.id) return;
@@ -313,51 +389,13 @@ export const StudentDashboard: React.FC = () => {
 
       // 5. Fetch Assignments for student's selected class or enrolled classes
       if (selectedClass) {
-        setAssignments([]);
-        const { data, error } = await supabase
-          .from('assignments')
-          .select('*')
-          .eq('class_id', selectedClass.id)
-          .order('created_at', { ascending: false });
-
-        console.log('[ASSIGNMENTS] class:', selectedClass?.id);
-        console.log('[ASSIGNMENTS] database:', data);
-        console.log('[ASSIGNMENTS] error:', error);
-
-        if (data && !error) {
-          const mappedAss = data.map((a: any) => ({
-            id: a.id,
-            classId: String(a.class_id || '').trim(),
-            title: a.title,
-            subject: 'Mata Pelajaran',
-            dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
-            maxScore: a.max_score || 100,
-            status: (submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan') as 'Belum Dikumpulkan' | 'Sudah Dikumpulkan',
-            description: a.description || '',
-            attachmentUrl: a.attachment_url || a.file_url || '',
-            grade: submittedMap[a.id]?.grade,
-            feedback: submittedMap[a.id]?.feedback,
-            submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
-            submittedFileUrl: submittedMap[a.id]?.fileUrl,
-          }));
-          setAssignments(mappedAss);
-          if (selectedAssignment && !mappedAss.some((a) => a.id === selectedAssignment.id)) {
-            setSelectedAssignment(null);
-          }
-        } else {
-          setAssignments([]);
-          if (selectedAssignment) setSelectedAssignment(null);
-        }
+        await fetchCurrentClassAssignments();
       } else if (classIds.length > 0) {
         const { data: fullAss, error: assErr } = await supabase
           .from('assignments')
           .select('*')
           .in('class_id', classIds)
           .order('created_at', { ascending: false });
-
-        console.log('[ASSIGNMENTS] class: all enrolled', classIds);
-        console.log('[ASSIGNMENTS] database:', fullAss);
-        console.log('[ASSIGNMENTS] error:', assErr);
 
         if (fullAss && !assErr) {
           const mappedAss = fullAss.map((a: any) => ({
