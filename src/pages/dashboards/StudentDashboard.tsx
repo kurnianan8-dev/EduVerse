@@ -146,10 +146,20 @@ export const StudentDashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    if (user?.id) {
-      ensureStudentQrCodeInSupabase();
+    if (!user?.id) return;
+
+    ensureStudentQrCodeInSupabase();
+    fetchStudentEnrolledClasses();
+
+    const handleFocus = () => {
       fetchStudentEnrolledClasses();
-    }
+    };
+
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [user?.id, selectedClass?.id, classWorkspaceTab]);
 
   const ensureStudentQrCodeInSupabase = async () => {
@@ -303,6 +313,7 @@ export const StudentDashboard: React.FC = () => {
 
       // 5. Fetch Assignments for student's selected class or enrolled classes
       if (selectedClass) {
+        setAssignments([]);
         const { data, error } = await supabase
           .from('assignments')
           .select('*')
