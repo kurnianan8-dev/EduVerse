@@ -387,45 +387,6 @@ export const StudentDashboard: React.FC = () => {
         console.log('[STUDENT MATERIALS COUNT]', mappedMats.length);
       }
 
-      // 5. Fetch Assignments for student's selected class or enrolled classes
-      if (selectedClass) {
-        await fetchCurrentClassAssignments();
-      } else if (classIds.length > 0) {
-        const { data: fullAss, error: assErr } = await supabase
-          .from('assignments')
-          .select('*')
-          .in('class_id', classIds)
-          .order('created_at', { ascending: false });
-
-        if (fullAss && !assErr) {
-          const mappedAss = fullAss.map((a: any) => ({
-            id: a.id,
-            classId: String(a.class_id || '').trim(),
-            title: a.title,
-            subject: 'Mata Pelajaran',
-            dueDate: a.due_date ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : (a.due_at ? new Date(a.due_at).toLocaleDateString('id-ID') : 'Tanpa Tenggat'),
-            maxScore: a.max_score || 100,
-            status: (submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan') as 'Belum Dikumpulkan' | 'Sudah Dikumpulkan',
-            description: a.description || '',
-            attachmentUrl: a.attachment_url || a.file_url || '',
-            grade: submittedMap[a.id]?.grade,
-            feedback: submittedMap[a.id]?.feedback,
-            submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
-            submittedFileUrl: submittedMap[a.id]?.fileUrl,
-          }));
-          setAssignments(mappedAss);
-          if (selectedAssignment && !mappedAss.some((a) => a.id === selectedAssignment.id)) {
-            setSelectedAssignment(null);
-          }
-        } else {
-          setAssignments([]);
-          if (selectedAssignment) setSelectedAssignment(null);
-        }
-      } else {
-        setAssignments([]);
-        if (selectedAssignment) setSelectedAssignment(null);
-      }
-
       // 6. Fetch Announcements
       const { data: annData } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
       if (annData) {
