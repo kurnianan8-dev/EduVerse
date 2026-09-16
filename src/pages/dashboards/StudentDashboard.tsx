@@ -336,6 +336,10 @@ export const StudentDashboard: React.FC = () => {
           setAssignments(mappedAss);
           console.log('[STUDENT ASSIGNMENTS]', mappedAss);
           console.log('[STUDENT ASSIGNMENTS COUNT]', mappedAss.length);
+
+          if (selectedAssignment && !mappedAss.some((a) => a.id === selectedAssignment.id)) {
+            setSelectedAssignment(null);
+          }
         } else if (assErr) {
           console.error('[Student Assignment Audit Error - Assignments]:', assErr);
         }
@@ -344,6 +348,26 @@ export const StudentDashboard: React.FC = () => {
         setAssignments([]);
         console.log('[STUDENT ASSIGNMENTS]', []);
         console.log('[STUDENT ASSIGNMENTS COUNT]', 0);
+        if (selectedAssignment) setSelectedAssignment(null);
+      }
+
+      if (selectedClass) {
+        const { data: liveAssignments, error: liveAssignmentsError } = await supabase
+          .from('assignments')
+          .select('*')
+          .eq('class_id', selectedClass.id)
+          .order('created_at', { ascending: false });
+
+        console.log('========== LIVE STUDENT ASSIGNMENTS ==========');
+        console.log('selectedClass.id:', selectedClass.id);
+        console.log('liveAssignments:', liveAssignments);
+        console.log('liveAssignmentsError:', liveAssignmentsError);
+        console.log('liveAssignments count:', liveAssignments?.length || 0);
+        console.log('===============================================');
+
+        if (selectedAssignment && (!liveAssignments || !liveAssignments.some((a: any) => a.id === selectedAssignment.id))) {
+          setSelectedAssignment(null);
+        }
       }
 
       // 6. Fetch Announcements
@@ -837,6 +861,13 @@ export const StudentDashboard: React.FC = () => {
 
             console.log('📌 [StudentDashboard Audit] Selected Class ID:', selectedClass?.id);
             console.log('📌 [StudentDashboard Audit] Count of Class Materials Found:', classMaterials.length);
+
+            console.log('========== STUDENT TASK UI ==========');
+            console.log('selectedClass:', selectedClass);
+            console.log('assignments state:', classAssignments);
+            console.log('assignments count:', classAssignments.length);
+            console.log('selectedAssignment:', selectedAssignment);
+            console.log('=====================================');
 
             return (
               <>
