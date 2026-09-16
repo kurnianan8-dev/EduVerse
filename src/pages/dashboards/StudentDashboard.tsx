@@ -152,11 +152,10 @@ export const StudentDashboard: React.FC = () => {
     fetchStudentEnrolledClasses();
 
     const handleFocus = () => {
-      if (selectedClass?.id && classWorkspaceTab === 'tugas') {
+      if (selectedClass?.id) {
         fetchCurrentClassAssignments();
-      } else {
-        fetchStudentEnrolledClasses();
       }
+      fetchStudentEnrolledClasses();
     };
 
     window.addEventListener('focus', handleFocus);
@@ -168,8 +167,6 @@ export const StudentDashboard: React.FC = () => {
 
   useEffect(() => {
     if (!selectedClass?.id) return;
-    if (classWorkspaceTab !== 'tugas') return;
-
     fetchCurrentClassAssignments();
   }, [selectedClass?.id, classWorkspaceTab]);
 
