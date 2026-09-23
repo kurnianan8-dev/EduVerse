@@ -983,48 +983,74 @@ export const StudentDashboard: React.FC = () => {
                 )}
 
                 {/* TAB 2: TUGAS & PENILAIAN */}
-                {classWorkspaceTab === 'tugas' && (
-                  <div className="space-y-4">
-                    {classAssignments.length === 0 ? (
-                      <div className="p-8 text-center bg-card border border-border rounded-2xl text-muted-foreground italic text-xs">
-                        Belum ada tugas diberikan oleh Guru untuk kelas ini.
+                {classWorkspaceTab === 'tugas' && (() => {
+                  console.log('[FORENSIC RENDER]', {
+                    BUILD: '24839a9',
+                    selectedClass: selectedClass?.id,
+                    'assignments.length': assignments.length,
+                    'classAssignments.length': classAssignments.length,
+                    'classAssignments IDs': classAssignments.map((a) => a.id),
+                    selectedAssignment,
+                  });
+                  return (
+                    <div className="space-y-4">
+                      {/* FORENSIC MARKER BANNER */}
+                      <div className={`p-4 rounded-2xl border text-xs font-mono font-bold flex flex-col gap-1 ${
+                        classAssignments.length === 0
+                          ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
+                          : 'bg-blue-500/10 text-blue-600 border-blue-500/30'
+                      }`}>
+                        <div>
+                          {classAssignments.length === 0
+                            ? 'FORENSIC STATE: EMPTY — BUILD 24839a9'
+                            : 'FORENSIC STATE: HAS DATA — BUILD 24839a9'}
+                        </div>
+                        <div className="text-[11px] font-normal">
+                          selectedClass.id: <strong className="font-mono">{selectedClass?.id || 'null'}</strong> | assignments.length: <strong className="font-mono">{assignments.length}</strong> | classAssignments.length: <strong className="font-mono">{classAssignments.length}</strong>
+                        </div>
                       </div>
-                    ) : (
-                      classAssignments.map((a) => (
-                  <div key={a.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm space-y-3 text-left">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-base text-foreground">{a.title}</h4>
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                          a.status === 'Sudah Dikumpulkan'
-                            ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
-                            : 'bg-amber-500/10 text-amber-600 border border-amber-500/20'
-                        }`}
-                      >
-                        {a.status}
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">{a.description}</p>
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs text-muted-foreground border-t border-border pt-3 gap-2">
-                      <div className="space-y-0.5">
-                        <div>Deadline: <strong className="text-amber-600">{a.dueDate}</strong></div>
-                        <div>Nilai Maksimal: <strong>{a.maxScore || 100} Poin</strong></div>
-                      </div>
-                      {a.grade !== undefined && (
-                        <span className="font-bold text-emerald-600">Nilai: {a.grade} / {a.maxScore || 100}</span>
+
+                      {classAssignments.length === 0 ? (
+                        <div className="p-8 text-center bg-card border border-border rounded-2xl text-muted-foreground italic text-xs">
+                          Belum ada tugas diberikan oleh Guru untuk kelas ini.
+                        </div>
+                      ) : (
+                        classAssignments.map((a) => (
+                          <div key={a.id} className="p-5 rounded-2xl bg-card border border-border shadow-sm space-y-3 text-left">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-bold text-base text-foreground">{a.title}</h4>
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                                  a.status === 'Sudah Dikumpulkan'
+                                    ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                    : 'bg-amber-500/10 text-amber-600 border border-amber-500/20'
+                                }`}
+                              >
+                                {a.status}
+                              </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">{a.description}</p>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs text-muted-foreground border-t border-border pt-3 gap-2">
+                              <div className="space-y-0.5">
+                                <div>Deadline: <strong className="text-amber-600">{a.dueDate}</strong></div>
+                                <div>Nilai Maksimal: <strong>{a.maxScore || 100} Poin</strong></div>
+                              </div>
+                              {a.grade !== undefined && (
+                                <span className="font-bold text-emerald-600">Nilai: {a.grade} / {a.maxScore || 100}</span>
+                              )}
+                              <button
+                                onClick={() => setSelectedAssignment(a)}
+                                className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer hover:bg-blue-700 transition-all shadow self-start sm:self-auto"
+                              >
+                                {a.status === 'Sudah Dikumpulkan' ? 'Lihat / Edit Jawaban' : 'Kerjakan / Kumpulkan'}
+                              </button>
+                            </div>
+                          </div>
+                        ))
                       )}
-                      <button
-                        onClick={() => setSelectedAssignment(a)}
-                        className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer hover:bg-blue-700 transition-all shadow self-start sm:self-auto"
-                      >
-                        {a.status === 'Sudah Dikumpulkan' ? 'Lihat / Edit Jawaban' : 'Kerjakan / Kumpulkan'}
-                      </button>
                     </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
+                  );
+                })()}
 
           {/* TAB 3: ABSENSI & KARTU QR */}
           {classWorkspaceTab === 'absensi' && (
