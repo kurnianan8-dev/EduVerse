@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   BookOpen,
@@ -107,6 +107,9 @@ export const StudentDashboard: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
 
+  // Request ID guard for async assignment fetches to prevent race conditions
+  const assignmentRequestIdRef = useRef(0);
+
   // Navigation & Classroom Selection States
   const [enrolledClasses, setEnrolledClasses] = useState<EnrolledClass[]>([]);
   const [selectedClass, setSelectedClass] = useState<EnrolledClass | null>(null);
@@ -171,6 +174,8 @@ export const StudentDashboard: React.FC = () => {
   }, [selectedClass?.id, classWorkspaceTab]);
 
   const fetchCurrentClassAssignments = async () => {
+    const requestId = ++assignmentRequestIdRef.current;
+
     if (!selectedClass?.id) {
       setAssignments([]);
       setSelectedAssignment(null);
@@ -183,6 +188,7 @@ export const StudentDashboard: React.FC = () => {
     const submittedMap: Record<string, { grade?: number; feedback?: string; fileUrl?: string; fileName?: string; submittedAt?: string }> = {};
     if (user?.id) {
       const { data: subData } = await supabase.from('submissions').select('*').eq('student_id', user.id);
+      if (requestId !== assignmentRequestIdRef.current) return;
       if (subData) {
         subData.forEach((s: any) => {
           submittedMap[s.assignment_id] = {
@@ -201,6 +207,8 @@ export const StudentDashboard: React.FC = () => {
       .select('*')
       .eq('class_id', currentClassId)
       .order('created_at', { ascending: false });
+
+    if (requestId !== assignmentRequestIdRef.current) return;
 
     if (error) {
       console.error('[CURRENT CLASS ASSIGNMENTS ERROR]', error);
@@ -225,12 +233,15 @@ export const StudentDashboard: React.FC = () => {
       submittedFileUrl: submittedMap[a.id]?.fileUrl,
     }));
 
+    if (requestId !== assignmentRequestIdRef.current) return;
+
     setAssignments(mappedAss);
 
     if (
       selectedAssignment &&
       !mappedAss.some((a: any) => a.id === selectedAssignment.id)
     ) {
+      if (requestId !== assignmentRequestIdRef.current) return;
       setSelectedAssignment(null);
     }
   };
