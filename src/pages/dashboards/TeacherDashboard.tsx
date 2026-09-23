@@ -1357,22 +1357,49 @@ export const TeacherDashboard: React.FC = () => {
         }
       }
 
-      // 2. Database deletion from public.assignments (ON DELETE CASCADE for submissions)
-      const { error: dbErr } = await (supabase as any)
+      // 2. Database deletion from public.assignments (with .select('id') verification)
+      console.log('📌 [Delete Assignment Request]: Executing DELETE on assignments table for ID:', assignment.id);
+      const { data: deletedRows, error: dbErr } = await (supabase as any)
         .from('assignments')
         .delete()
-        .eq('id', assignment.id);
+        .eq('id', assignment.id)
+        .select('id');
+
+      console.log('📌 [Delete Assignment DB Response]:', { deletedRows, dbErr });
 
       if (dbErr) {
         console.error('❌ [Delete Assignment DB Error]:', dbErr);
-        alert(`Tugas gagal dihapus: ${dbErr.message}`);
+        alert(`Tugas gagal dihapus dari database!\n\nPenyebab Error: ${dbErr.message}`);
         setDeletingAssignmentId(null);
         return;
       }
 
-      // 3. Update local state
+      if (!deletedRows || deletedRows.length !== 1) {
+        console.error('❌ [Delete Assignment Verification Failed]: 0 rows affected by DELETE query. deletedRows:', deletedRows);
+        alert(`Tugas gagal dihapus dari database Supabase!\n\n0 baris terhapus (Kemungkinan kendala izin RLS atau ID tugas tidak ditemukan).`);
+        setDeletingAssignmentId(null);
+        return;
+      }
+
+      // 3. Post-deletion SELECT Verification
+      const { data: verifyRow, error: verifyErr } = await (supabase as any)
+        .from('assignments')
+        .select('id')
+        .eq('id', assignment.id)
+        .maybeSingle();
+
+      console.log('📌 [Delete Assignment Verification Check]:', { verifyRow, verifyErr });
+
+      if (verifyRow !== null) {
+        console.error('❌ [Delete Assignment Verification Conflict]: Row still present in database after DELETE!');
+        alert(`Tugas gagal dihapus: Data tugas masih ada di database setelah proses hapus.`);
+        setDeletingAssignmentId(null);
+        return;
+      }
+
+      // 4. Update local state ONLY after DB deletion and verification pass 100%
       setAssignments((prev) => prev.filter((a) => a.id !== assignment.id));
-      alert(`✅ Tugas "${assignment.title}" berhasil dihapus.`);
+      alert(`✅ Tugas "${assignment.title}" berhasil dihapus secara permanen dari database Supabase.`);
     } catch (err: any) {
       console.error('❌ [Delete Assignment Exception]:', err);
       alert(`Tugas gagal dihapus: ${err.message}`);
