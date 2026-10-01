@@ -1205,6 +1205,10 @@ export const TeacherDashboard: React.FC = () => {
   const handleCreateAssignmentInClass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAssignment.title || !selectedClass) return;
+    if (!user?.id) {
+      alert('Pengguna tidak terotentikasi (session login tidak ditemukan). Silakan login ulang.');
+      return;
+    }
 
     try {
       const { data, error } = await (supabase as any).from('assignments').insert({
