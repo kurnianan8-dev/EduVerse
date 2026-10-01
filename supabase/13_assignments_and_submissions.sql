@@ -50,7 +50,7 @@ ON public.assignments FOR UPDATE TO authenticated USING (true) WITH CHECK (true)
 
 DROP POLICY IF EXISTS "Authenticated teachers can delete assignments" ON public.assignments;
 CREATE POLICY "Authenticated teachers can delete assignments"
-ON public.assignments FOR DELETE TO authenticated USING (true);
+ON public.assignments FOR DELETE TO authenticated USING (teacher_id = auth.uid());
 
 -- 5. RLS Policies for public.submissions
 DROP POLICY IF EXISTS "Authenticated users can select submissions" ON public.submissions;
