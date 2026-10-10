@@ -1351,11 +1351,16 @@ export const TeacherDashboard: React.FC = () => {
     setDeletingAssignmentId(assignment.id);
 
     try {
-      // 1. Storage attachment deletion if fileUrl exists in bucket 'materials'
-      const storagePath = getStorageFilePathFromUrl(assignment.fileUrl, 'materials');
+      // 1. Storage attachment deletion if fileUrl exists in bucket 'materials' or 'student-submissions'
+      let storagePath = getStorageFilePathFromUrl(assignment.fileUrl, 'materials');
+      let targetBucket = 'materials';
+      if (!storagePath) {
+        storagePath = getStorageFilePathFromUrl(assignment.fileUrl, 'student-submissions');
+        targetBucket = 'student-submissions';
+      }
       if (storagePath) {
-        console.log('📌 [Delete Assignment]: Removing Storage attachment from bucket "materials", path:', storagePath);
-        const { error: storageErr } = await supabase.storage.from('materials').remove([storagePath]);
+        console.log(`📌 [Delete Assignment]: Removing Storage attachment from bucket "${targetBucket}", path:`, storagePath);
+        const { error: storageErr } = await supabase.storage.from(targetBucket).remove([storagePath]);
         if (storageErr) {
           console.warn('⚠️ [Storage Delete Warning]:', storageErr.message);
         }
