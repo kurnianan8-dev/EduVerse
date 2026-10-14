@@ -1341,6 +1341,25 @@ export const TeacherDashboard: React.FC = () => {
 
   // Delete Assignment Handler (Storage + Database with ON DELETE CASCADE for submissions)
   const handleDeleteAssignment = async (assignment: AssignmentItem, submissionCount: number = 0) => {
+    // 0. Parameter Validation & Tracing Logs
+    const targetAssignmentId = assignment?.id ? String(assignment.id).trim() : '';
+    console.log('📌 [handleDeleteAssignment] Memulai proses hapus tugas:', {
+      assignmentId: assignment?.id,
+      cleanAssignmentId: targetAssignmentId,
+      idType: typeof assignment?.id,
+      title: assignment?.title,
+      classId: assignment?.classId,
+      submissionCount,
+      userAuthId: user?.id,
+      timestamp: new Date().toISOString()
+    });
+
+    if (!targetAssignmentId || targetAssignmentId === 'undefined' || targetAssignmentId === 'null') {
+      console.error('❌ [handleDeleteAssignment] Parameter ID tugas tidak valid (null/undefined):', assignment);
+      alert('Gagal menghapus tugas: ID tugas tidak valid atau tidak ditemukan pada data antarmuka.');
+      return;
+    }
+
     let confirmMsg = `Apakah Anda yakin ingin menghapus tugas "${assignment.title}"?\n\nTugas dan file lampirannya akan dihapus.`;
     if (submissionCount > 0) {
       confirmMsg = `Perhatian: tugas "${assignment.title}" sudah memiliki ${submissionCount} pengumpulan siswa.\n\nJika dihapus, tugas dan pengumpulan terkait juga akan terhapus. Apakah Anda yakin ingin menghapus tugas ini?`;
@@ -1348,7 +1367,7 @@ export const TeacherDashboard: React.FC = () => {
 
     if (!window.confirm(confirmMsg)) return;
 
-    setDeletingAssignmentId(assignment.id);
+    setDeletingAssignmentId(targetAssignmentId);
 
     try {
       // 1. Storage attachment deletion if fileUrl exists in bucket 'materials' or 'student-submissions'
@@ -1359,19 +1378,49 @@ export const TeacherDashboard: React.FC = () => {
         targetBucket = 'student-submissions';
       }
       if (storagePath) {
-        console.log(`📌 [Delete Assignment]: Removing Storage attachment from bucket "${targetBucket}", path:`, storagePath);
+        console.log(`📌 [Delete Assignment]: Menghapus attachment tugas dari Storage bucket "${targetBucket}", path:`, storagePath);
         const { error: storageErr } = await supabase.storage.from(targetBucket).remove([storagePath]);
         if (storageErr) {
           console.warn('⚠️ [Storage Delete Warning]:', storageErr.message);
         }
       }
 
-      // 2. Database deletion from public.assignments (with .select('id') verification)
-      console.log('📌 [Delete Assignment Request]: Executing DELETE on assignments table for ID:', assignment.id);
+      // 2. Cascade cleanup: Clean up student submission files in Storage if any exist
+      try {
+        const { data: subFiles } = await (supabase as any)
+          .from('submissions')
+          .select('file_url')
+          .eq('assignment_id', targetAssignmentId);
+
+        if (subFiles && subFiles.length > 0) {
+          console.log(`📌 [Delete Assignment]: Membersihkan ${subFiles.length} berkas submission siswa dari Storage...`);
+          for (const s of subFiles) {
+            const sPath = getStorageFilePathFromUrl(s.file_url, 'student-submissions');
+            if (sPath) {
+              await supabase.storage.from('student-submissions').remove([sPath]);
+            }
+          }
+        }
+      } catch (subStorageErr) {
+        console.warn('⚠️ [Submission Storage Cleanup Warning]:', subStorageErr);
+      }
+
+      // 3. Proactive Submissions Table Deletion (Defense-in-depth against FK restrict lockup)
+      try {
+        await (supabase as any)
+          .from('submissions')
+          .delete()
+          .eq('assignment_id', targetAssignmentId);
+      } catch (subDelErr) {
+        console.warn('⚠️ [Submissions Pre-Delete Warning]:', subDelErr);
+      }
+
+      // 4. Database deletion from public.assignments (with .select('id') verification)
+      console.log('📌 [Delete Assignment Request]: Menjalankan query DELETE pada public.assignments untuk ID:', targetAssignmentId);
       const { data: deletedRows, error: dbErr } = await (supabase as any)
         .from('assignments')
         .delete()
-        .eq('id', assignment.id)
+        .eq('id', targetAssignmentId)
         .select('id');
 
       console.log('📌 [Delete Assignment DB Response]:', { deletedRows, dbErr });
@@ -1385,16 +1434,20 @@ export const TeacherDashboard: React.FC = () => {
 
       if (!deletedRows || deletedRows.length !== 1) {
         console.error('❌ [Delete Assignment Verification Failed]: 0 rows affected by DELETE query. deletedRows:', deletedRows);
-        alert(`Tugas gagal dihapus dari database Supabase!\n\n0 baris terhapus (Kemungkinan kendala izin RLS atau ID tugas tidak ditemukan).`);
+        alert(
+          `Tugas gagal dihapus dari database Supabase!\n\n` +
+          `0 baris terhapus (Kemungkinan kendala izin RLS atau ID tugas tidak ditemukan).\n\n` +
+          `Pastikan policy RLS DELETE untuk role Guru/Super Admin sudah diaktifkan di Supabase SQL Editor.`
+        );
         setDeletingAssignmentId(null);
         return;
       }
 
-      // 3. Post-deletion SELECT Verification
+      // 5. Post-deletion SELECT Verification
       const { data: verifyRow, error: verifyErr } = await (supabase as any)
         .from('assignments')
         .select('id')
-        .eq('id', assignment.id)
+        .eq('id', targetAssignmentId)
         .maybeSingle();
 
       console.log('📌 [Delete Assignment Verification Check]:', { verifyRow, verifyErr });
@@ -1406,14 +1459,103 @@ export const TeacherDashboard: React.FC = () => {
         return;
       }
 
-      // 4. Update local state ONLY after DB deletion and verification pass 100%
-      setAssignments((prev) => prev.filter((a) => a.id !== assignment.id));
+      // 6. Update local React state & trigger Class Refresh
+      setAssignments((prev) => prev.filter((a) => a.id !== targetAssignmentId));
+      if (selectedClass?.id) {
+        fetchClassDetails(selectedClass.id);
+      }
+
       alert(`✅ Tugas "${assignment.title}" berhasil dihapus secara permanen dari database Supabase.`);
     } catch (err: any) {
       console.error('❌ [Delete Assignment Exception]:', err);
       alert(`Tugas gagal dihapus: ${err.message}`);
     } finally {
       setDeletingAssignmentId(null);
+    }
+  };
+
+  // State for Confirm Delete Class Modal
+  const [classToDelete, setClassToDelete] = useState<ClassItem | null>(null);
+  const [isDeletingClass, setIsDeletingClass] = useState<boolean>(false);
+
+  // Delete Class Handler (Cascade Cleanup + Database Deletion + UI Refresh)
+  const handleDeleteClass = async (classItem: ClassItem) => {
+    const classId = classItem?.id ? String(classItem.id).trim() : '';
+    console.log('📌 [handleDeleteClass] Memulai proses hapus kelas:', {
+      classId,
+      idType: typeof classItem?.id,
+      name: classItem?.name,
+      code: classItem?.code,
+      currentUserAuthId: user?.id,
+      timestamp: new Date().toISOString()
+    });
+
+    if (!classId || classId === 'undefined' || classId === 'null') {
+      console.error('❌ [handleDeleteClass] classId tidak valid (null/undefined):', classItem);
+      alert('Gagal menghapus kelas: ID kelas tidak valid atau tidak ditemukan.');
+      return;
+    }
+
+    setIsDeletingClass(true);
+
+    try {
+      // 1. Proaktif hapus data anak terkait jika DB foreign key belum memiliki cascade
+      try {
+        await (supabase as any).from('materials').delete().eq('class_id', classId);
+        await (supabase as any).from('assignments').delete().eq('class_id', classId);
+        await (supabase as any).from('announcements').delete().eq('class_id', classId);
+        await (supabase as any).from('enrollments').delete().eq('class_id', classId);
+        await (supabase as any).from('attendance_records').delete().eq('class_id', classId);
+      } catch (cascadeWarn) {
+        console.warn('⚠️ [handleDeleteClass] Pre-cleanup notice (FK cascade might handle it):', cascadeWarn);
+      }
+
+      // 2. Eksekusi query DELETE pada tabel classes dengan .select('id')
+      console.log('📌 [handleDeleteClass] Menjalankan query DELETE pada public.classes untuk ID:', classId);
+      const { data: deletedRows, error: dbErr } = await (supabase as any)
+        .from('classes')
+        .delete()
+        .eq('id', classId)
+        .select('id');
+
+      console.log('📌 [handleDeleteClass] Hasil query DELETE classes:', { deletedRows, dbErr });
+
+      if (dbErr) {
+        console.error('❌ [handleDeleteClass] Database Error:', dbErr);
+        alert(`Kelas gagal dihapus dari database!\n\nPenyebab Error: ${dbErr.message || 'Kendala izin RLS atau skema database.'}`);
+        return;
+      }
+
+      if (!deletedRows || deletedRows.length !== 1) {
+        console.error('❌ [handleDeleteClass] 0 baris terhapus:', deletedRows);
+        alert(
+          `Kelas gagal dihapus dari database Supabase!\n\n` +
+          `0 baris terhapus (Kemungkinan kendala izin RLS atau ID kelas tidak ditemukan).\n\n` +
+          `Pastikan akun Anda memiliki hak akses untuk menghapus kelas ini.`
+        );
+        return;
+      }
+
+      // 3. Pembersihan State UI Lokal
+      setClasses((prev) => prev.filter((c) => c.id !== classId));
+      setMaterials((prev) => prev.filter((m) => m.classId !== classId));
+      setAssignments((prev) => prev.filter((a) => a.classId !== classId));
+      setAnnouncements((prev) => prev.filter((a) => a.classId !== classId));
+
+      // Jika kelas yang sedang dibuka adalah kelas yang baru saja dihapus, reset selectedClass ke null
+      if (selectedClass && selectedClass.id === classId) {
+        setSelectedClass(null);
+      }
+
+      // Tutup modal dialog konfirmasi
+      setClassToDelete(null);
+
+      alert(`✅ Kelas "${classItem.name}" berhasil dihapus secara permanen dari database.`);
+    } catch (err: any) {
+      console.error('❌ [handleDeleteClass] Exception:', err);
+      alert(`Kelas gagal dihapus: ${err.message}`);
+    } finally {
+      setIsDeletingClass(false);
     }
   };
 
@@ -1575,6 +1717,23 @@ export const TeacherDashboard: React.FC = () => {
   return (
     <div className="space-y-6 font-sans">
       {/* ========================================================= */}
+      {/* PENANDA VISUAL VERSI TERBARU (Release / Cache Check Banner) */}
+      {/* ========================================================= */}
+      <div className="p-3.5 rounded-2xl bg-gradient-to-r from-rose-600 via-amber-600 to-teal-600 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-bold border-2 border-white/20 animate-in fade-in">
+        <div className="flex items-center gap-2">
+          <span className="px-2.5 py-1 rounded-xl bg-black/40 backdrop-blur-sm text-yellow-300 font-mono text-[11px] uppercase tracking-wider animate-pulse border border-yellow-400/50">
+            ⚡ UPDATE AKTIF
+          </span>
+          <span className="text-sm">
+            EduVerse v2.5 — Fitur Hapus Kelas &amp; Hapus Tugas Telah Aktif
+          </span>
+        </div>
+        <span className="text-[11px] font-mono bg-white/20 px-2.5 py-1 rounded-xl shrink-0 self-start sm:self-auto">
+          Commit Terbaru Memuat
+        </span>
+      </div>
+
+      {/* ========================================================= */}
       {/* SCREEN A: WORKSPACE HALAMAN KELAS GURU (If a class is selected) */}
       {/* ========================================================= */}
       {selectedClass ? (
@@ -1627,6 +1786,13 @@ export const TeacherDashboard: React.FC = () => {
                   className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer"
                 >
                   <Megaphone className="w-4 h-4" /> + Pengumuman
+                </button>
+                <button
+                  onClick={() => setClassToDelete(selectedClass)}
+                  className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white border border-rose-500 font-bold text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition-all hover:scale-105"
+                  title="Hapus Kelas Ini"
+                >
+                  <Trash2 className="w-4 h-4" /> Hapus Kelas
                 </button>
               </div>
             </div>
@@ -2057,12 +2223,23 @@ export const TeacherDashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="space-y-2 pt-3 border-t border-border">
+                    <div className="pt-3 border-t border-border flex items-center gap-2">
                       <button
                         onClick={() => setSelectedClass(cls)}
-                        className="w-full py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        className="flex-1 py-2.5 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                       >
                         Buka Kelas <ArrowRight className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setClassToDelete(cls);
+                        }}
+                        className="py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-600 text-rose-500 hover:text-white border border-rose-500/30 transition-all font-bold text-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                        title={`Hapus Kelas ${cls.name}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Hapus Kelas</span>
                       </button>
                     </div>
                   </div>
@@ -2460,6 +2637,80 @@ export const TeacherDashboard: React.FC = () => {
                 <span>{cameraError}</span>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirm Delete Class */}
+      {classToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2 text-rose-500">
+                <Trash2 className="w-5 h-5 shrink-0" />
+                <h3 className="text-base font-bold text-foreground">Konfirmasi Hapus Kelas</h3>
+              </div>
+              <button
+                onClick={() => !isDeletingClass && setClassToDelete(null)}
+                disabled={isDeletingClass}
+                className="text-muted-foreground hover:text-foreground cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-xs space-y-2">
+              <p className="font-bold text-rose-600 dark:text-rose-400">
+                Apakah Anda yakin ingin menghapus kelas ini?
+              </p>
+              <p className="text-muted-foreground leading-relaxed">
+                Semua materi, tugas, dan data siswa di dalamnya akan ikut terhapus secara permanen dari database. Tindakan ini tidak dapat dibatalkan.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-muted/40 border border-border text-xs space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Nama Kelas:</span>
+                <span className="font-bold text-foreground">{classToDelete.name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Kode Kelas:</span>
+                <span className="font-mono font-bold text-blue-600 dark:text-blue-400">{classToDelete.code}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Mata Pelajaran:</span>
+                <span className="font-bold text-foreground">{classToDelete.courseName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Siswa Terdaftar:</span>
+                <span className="font-bold text-foreground">{classToDelete.studentCount} Siswa</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setClassToDelete(null)}
+                disabled={isDeletingClass}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted cursor-pointer transition-all disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteClass(classToDelete)}
+                disabled={isDeletingClass}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg shadow-rose-600/30 flex items-center gap-2 cursor-pointer transition-all disabled:opacity-50"
+              >
+                {isDeletingClass ? (
+                  <>Menghapus Kelas...</>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" /> Ya, Hapus Kelas
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
