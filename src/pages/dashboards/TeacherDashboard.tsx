@@ -1717,23 +1717,6 @@ export const TeacherDashboard: React.FC = () => {
   return (
     <div className="space-y-6 font-sans">
       {/* ========================================================= */}
-      {/* PENANDA VISUAL VERSI TERBARU (Release / Cache Check Banner) */}
-      {/* ========================================================= */}
-      <div className="p-3.5 rounded-2xl bg-gradient-to-r from-rose-600 via-amber-600 to-teal-600 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-bold border-2 border-white/20 animate-in fade-in">
-        <div className="flex items-center gap-2">
-          <span className="px-2.5 py-1 rounded-xl bg-black/40 backdrop-blur-sm text-yellow-300 font-mono text-[11px] uppercase tracking-wider animate-pulse border border-yellow-400/50">
-            ⚡ UPDATE AKTIF
-          </span>
-          <span className="text-sm">
-            EduVerse v2.5 — Fitur Hapus Kelas &amp; Hapus Tugas Telah Aktif
-          </span>
-        </div>
-        <span className="text-[11px] font-mono bg-white/20 px-2.5 py-1 rounded-xl shrink-0 self-start sm:self-auto">
-          Commit Terbaru Memuat
-        </span>
-      </div>
-
-      {/* ========================================================= */}
       {/* SCREEN A: WORKSPACE HALAMAN KELAS GURU (If a class is selected) */}
       {/* ========================================================= */}
       {selectedClass ? (
