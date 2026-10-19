@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useOutletContext } from 'react-router-dom';
+import { DashboardOutletContext } from '../../layouts/DashboardLayout';
 import {
   BookOpen,
   Award,
@@ -106,6 +107,8 @@ interface GradeItem {
 export const StudentDashboard: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
+  const outletContext = useOutletContext<DashboardOutletContext | undefined>();
+  const activeSection = outletContext?.activeNav || new URLSearchParams(location.search).get('section') || 'ruang-belajar';
 
   // Request ID guard for async assignment fetches to prevent race conditions
   const assignmentRequestIdRef = useRef(0);
@@ -114,6 +117,7 @@ export const StudentDashboard: React.FC = () => {
   const [enrolledClasses, setEnrolledClasses] = useState<EnrolledClass[]>([]);
   const [selectedClass, setSelectedClass] = useState<EnrolledClass | null>(null);
   const [classWorkspaceTab, setClassWorkspaceTab] = useState<'materi' | 'tugas' | 'absensi' | 'pengumuman' | 'nilai'>('materi');
+  const [subjectSearchQuery, setSubjectSearchQuery] = useState('');
 
   // Modal: Join Class States
   const [showJoinModal, setShowJoinModal] = useState(false);
@@ -126,6 +130,7 @@ export const StudentDashboard: React.FC = () => {
   // Classroom Contents
   const [materials, setMaterials] = useState<StudentMaterial[]>([]);
   const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
+  const [allEnrolledAssignments, setAllEnrolledAssignments] = useState<StudentAssignment[]>([]);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [gradesList, setGradesList] = useState<GradeItem[]>([]);
 
@@ -139,14 +144,30 @@ export const StudentDashboard: React.FC = () => {
 
   // Toast Notification
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [qrGeneratedAt, setQrGeneratedAt] = useState<Date>(() => new Date());
 
   const studentQrCode = user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '001'}`;
   const studentJurusan = user?.jurusan || 'Teknik / Umum';
+  const studentTodayYYYYMMDD = `${qrGeneratedAt.getFullYear()}-${String(qrGeneratedAt.getMonth() + 1).padStart(2, '0')}-${String(qrGeneratedAt.getDate()).padStart(2, '0')}`;
+  const studentTodayIndonesian = `${qrGeneratedAt.toLocaleDateString('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })} - ${qrGeneratedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false }).replace(/\./g, ':')} WIB`;
 
   const showToastNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 4000);
   };
+
+  // Return to section view when sidebar menu item is clicked
+  useEffect(() => {
+    if (outletContext?.navTrigger) {
+      setSelectedClass(null);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [outletContext?.navTrigger, activeSection]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -393,6 +414,48 @@ export const StudentDashboard: React.FC = () => {
         setMaterials(mappedMats);
         console.log('[STUDENT MATERIALS]', mappedMats);
         console.log('[STUDENT MATERIALS COUNT]', mappedMats.length);
+      }
+
+      // 5b. Fetch All Assignments across enrolled classes for Ruang Belajar Siswa summary
+      if (classIds.length > 0) {
+        const { data: fullAssData, error: fullAssErr } = await supabase
+          .from('assignments')
+          .select('*')
+          .in('class_id', classIds)
+          .order('created_at', { ascending: false });
+
+        if (fullAssData && !fullAssErr) {
+          const classNameMap: Record<string, string> = {};
+          if (clsData) {
+            clsData.forEach((c: any) => {
+              const rawName = (c.name || '').replace(/\s*\[EDU[A-Z0-9]+\]/i, '').trim();
+              classNameMap[c.id] = c.course_name || rawName || 'Mata Pelajaran';
+            });
+          }
+          setAllEnrolledAssignments(
+            fullAssData.map((a: any) => ({
+              id: a.id,
+              classId: String(a.class_id || '').trim(),
+              title: a.title,
+              subject: classNameMap[a.class_id] || 'Mata Pelajaran',
+              dueDate: a.due_date
+                ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+                : a.due_at
+                ? new Date(a.due_at).toLocaleDateString('id-ID')
+                : 'Tanpa Tenggat',
+              maxScore: a.max_score || 100,
+              status: (submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan') as 'Belum Dikumpulkan' | 'Sudah Dikumpulkan',
+              description: a.description || '',
+              attachmentUrl: a.attachment_url || a.file_url || '',
+              grade: submittedMap[a.id]?.grade,
+              feedback: submittedMap[a.id]?.feedback,
+              submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
+              submittedFileUrl: submittedMap[a.id]?.fileUrl,
+            }))
+          );
+        }
+      } else {
+        setAllEnrolledAssignments([]);
       }
 
       // 6. Fetch Announcements
@@ -744,6 +807,9 @@ export const StudentDashboard: React.FC = () => {
       setAssignments((prev) =>
         prev.map((a) => (a.id === selectedAssignment.id ? { ...a, status: 'Sudah Dikumpulkan' } : a))
       );
+      setAllEnrolledAssignments((prev) =>
+        prev.map((a) => (a.id === selectedAssignment.id ? { ...a, status: 'Sudah Dikumpulkan' } : a))
+      );
 
       showToastNotification('success', `✓ Tugas "${selectedAssignment.title}" berhasil dikumpulkan!`);
       setSelectedAssignment(null);
@@ -1055,24 +1121,35 @@ export const StudentDashboard: React.FC = () => {
           {/* TAB 3: ABSENSI & KARTU QR */}
           {classWorkspaceTab === 'absensi' && (
             <div className="p-6 rounded-3xl bg-card border border-border shadow-sm text-center space-y-4 max-w-lg mx-auto">
-              <h3 className="text-base font-bold text-foreground flex items-center justify-center gap-2">
-                <QrCode className="w-5 h-5 text-blue-600" /> Kartu QR Presensi Kelas
-              </h3>
-              <p className="text-xs text-muted-foreground">Tunjukkan QR Code ini kepada Guru saat sesi presensi berlangsung.</p>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-foreground flex items-center justify-center gap-2">
+                  <QrCode className="w-5 h-5 text-blue-600" /> Kartu QR Presensi Kelas
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Tunjukkan QR Code ini kepada Guru saat sesi presensi berlangsung. Tanggal &amp; waktu hadir tercatat otomatis saat dipindai.
+                </p>
+              </div>
 
-              <div className="p-6 rounded-2xl bg-white text-slate-900 shadow-xl inline-block w-full border border-slate-200">
-                <div className="flex justify-center py-2">
+              <div className="p-6 rounded-2xl bg-white text-slate-900 shadow-xl inline-block w-full border border-slate-200 space-y-3">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                  <Calendar className="w-3.5 h-3.5" /> {studentTodayIndonesian}
+                </div>
+
+                <div className="flex justify-center py-1">
                   <QRCodeSVG
                     id="student-qr-svg"
                     value={JSON.stringify({
                       app: 'EDUVERSE',
                       type: 'STUDENT_ATTENDANCE_QR',
-                      v: '1.0',
+                      v: '1.1',
                       sid: user?.id || '',
                       code: studentQrCode,
                       name: user?.fullName || '',
                       email: user?.email || '',
                       jurusan: studentJurusan,
+                      classId: selectedClass?.id || '',
+                      date: studentTodayYYYYMMDD,
+                      scanned_at: qrGeneratedAt.toISOString(),
                     })}
                     size={220}
                     level="H"
@@ -1091,12 +1168,25 @@ export const StudentDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <button
-                onClick={handleDownloadQR}
-                className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 cursor-pointer transition-all"
-              >
-                <Download className="w-4 h-4" /> Unduh QR Presensi (.PNG)
-              </button>
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQrGeneratedAt(new Date());
+                    showToastNotification('info', '🔄 Timestamp Sesi QR Presensi berhasil diperbarui ke waktu saat ini.');
+                  }}
+                  className="flex-1 py-3 px-4 rounded-xl bg-muted hover:bg-accent text-foreground font-bold text-xs border border-border flex items-center justify-center gap-2 cursor-pointer transition-all"
+                >
+                  <Clock className="w-4 h-4 text-blue-600" /> Perbarui Waktu Sesi QR
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadQR}
+                  className="flex-1 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 cursor-pointer transition-all"
+                >
+                  <Download className="w-4 h-4" /> Unduh QR Presensi (.PNG)
+                </button>
+              </div>
             </div>
           )}
 
@@ -1210,21 +1300,42 @@ export const StudentDashboard: React.FC = () => {
       );
     })()}
   </div>
-) : (
+) : activeSection === 'mata-pelajaran' ? (
         /* ========================================================= */
-        /* SCREEN B: DAFTAR KARTU KELAS RUANG BELAJAR SISWA (Default Grid View) */
+        /* SCREEN B1: KATALOG KELAS & MATA PELAJARAN DIIKUTI SISWA   */
         /* ========================================================= */
-        <div className="space-y-6">
-          <div className="flex items-center justify-between border-b border-border pb-3">
-            <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-blue-600" /> Kelas Yang Anda Ikuti ({enrolledClasses.length})
-            </h2>
-            <button
-              onClick={() => setShowJoinModal(true)}
-              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer transition-all"
-            >
-              <UserPlus className="w-3.5 h-3.5" /> + Gabung Kelas
-            </button>
+        <div className="space-y-6 animate-in fade-in duration-200">
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1 text-left">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                <BookOpen className="w-3.5 h-3.5" /> Katalog Mata Pelajaran Siswa
+              </div>
+              <h2 className="text-xl font-bold text-foreground">
+                Mata Pelajaran &amp; Kelas Diikuti ({enrolledClasses.length})
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Daftar seluruh kelas dan mata pelajaran yang Anda ikuti. Gunakan kode kelas dari Guru untuk bergabung ke mata pelajaran baru.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              <div className="relative">
+                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={subjectSearchQuery}
+                  onChange={(e) => setSubjectSearchQuery(e.target.value)}
+                  placeholder="Cari mata pelajaran / kelas..."
+                  className="w-full sm:w-56 pl-9 pr-3 py-2 rounded-xl bg-muted/60 border border-border text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <button
+                onClick={() => setShowJoinModal(true)}
+                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
+              >
+                <UserPlus className="w-4 h-4" /> + Gabung Kelas dengan Kode
+              </button>
+            </div>
           </div>
 
           {enrolledClasses.length === 0 ? (
@@ -1233,9 +1344,9 @@ export const StudentDashboard: React.FC = () => {
                 <BookOpen className="w-8 h-8" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-base font-bold text-foreground">Anda Belum Bergabung di Kelas Manapun</h3>
+                <h3 className="text-base font-bold text-foreground">Anda Belum Bergabung di Mata Pelajaran Manapun</h3>
                 <p className="text-xs text-muted-foreground max-w-md mx-auto">
-                  Minta Kode Kelas acak (contoh: EDU8XK21) kepada Guru Anda, lalu tekan tombol "+ Gabung Kelas" untuk mulai belajar.
+                  Minta Kode Kelas acak (contoh: EDU8XK21) kepada Guru Anda, lalu tekan tombol "+ Gabung Kelas dengan Kode" untuk mulai belajar.
                 </p>
               </div>
               <button
@@ -1246,60 +1357,394 @@ export const StudentDashboard: React.FC = () => {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {enrolledClasses.map((cls) => (
-                <div
-                  key={cls.id}
-                  className="p-6 rounded-3xl bg-card border border-border shadow-sm hover:shadow-xl transition-all space-y-4 flex flex-col justify-between group"
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-600 border border-blue-500/20">
-                        {cls.courseName}
-                      </span>
-                      <span className="text-[11px] font-mono font-bold text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                        {cls.code}
-                      </span>
-                    </div>
+            (() => {
+              const q = subjectSearchQuery.trim().toLowerCase();
+              const filteredClasses = q
+                ? enrolledClasses.filter(
+                    (c) =>
+                      c.name.toLowerCase().includes(q) ||
+                      c.courseName.toLowerCase().includes(q) ||
+                      c.teacherName.toLowerCase().includes(q) ||
+                      c.code.toLowerCase().includes(q)
+                  )
+                : enrolledClasses;
 
-                    <div>
-                      <h3 className="font-bold text-lg text-foreground group-hover:text-blue-600 transition-colors">{cls.name}</h3>
-                      <p className="text-xs text-muted-foreground mt-0.5">{cls.jurusan} • {cls.semester}</p>
-                    </div>
-
-                    <div className="flex items-center gap-2.5 pt-1">
-                      <UserAvatar src={cls.teacherAvatar} name={cls.teacherName} size="sm" />
-                      <span className="text-xs font-semibold text-foreground">{cls.teacherName}</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 pt-3 border-t border-border">
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                      <div className="p-2 rounded-xl bg-muted/40">
-                        <span className="block font-bold text-foreground">{cls.materialCount}</span>
-                        <span className="text-[10px] text-muted-foreground">Materi</span>
-                      </div>
-                      <div className="p-2 rounded-xl bg-muted/40">
-                        <span className="block font-bold text-foreground">{cls.assignmentCount}</span>
-                        <span className="text-[10px] text-muted-foreground">Tugas</span>
-                      </div>
-                      <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 font-bold">
-                        <span className="block">{cls.attendancePercent}%</span>
-                        <span className="text-[10px]">Presensi</span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => setSelectedClass(cls)}
-                      className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+              return filteredClasses.length === 0 ? (
+                <div className="p-8 text-center bg-card border border-border rounded-3xl text-xs text-muted-foreground italic">
+                  Tidak ada kelas atau mata pelajaran yang cocok dengan pencarian "{subjectSearchQuery}".
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredClasses.map((cls) => (
+                    <div
+                      key={cls.id}
+                      className="p-6 rounded-3xl bg-card border border-border shadow-sm hover:shadow-xl transition-all space-y-4 flex flex-col justify-between group text-left"
                     >
-                      Masuk Kelas <ArrowRight className="w-4 h-4" />
-                    </button>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                            {cls.courseName}
+                          </span>
+                          <span className="text-[11px] font-mono font-bold text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                            {cls.code}
+                          </span>
+                        </div>
+
+                        <div>
+                          <h3 className="font-bold text-lg text-foreground group-hover:text-blue-600 transition-colors">{cls.name}</h3>
+                          <p className="text-xs text-muted-foreground mt-0.5">{cls.jurusan} • {cls.semester}</p>
+                        </div>
+
+                        <div className="flex items-center gap-2.5 pt-1">
+                          <UserAvatar src={cls.teacherAvatar} name={cls.teacherName} size="sm" />
+                          <div>
+                            <span className="block text-xs font-semibold text-foreground">{cls.teacherName}</span>
+                            <span className="block text-[10px] text-muted-foreground">Guru Pengampu</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 pt-3 border-t border-border">
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassWorkspaceTab('materi');
+                            }}
+                            className="p-2 rounded-xl bg-muted/40 hover:bg-blue-500/10 transition-colors cursor-pointer"
+                            title="Buka Materi Kelas"
+                          >
+                            <span className="block font-bold text-foreground">{cls.materialCount}</span>
+                            <span className="text-[10px] text-muted-foreground">Materi</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassWorkspaceTab('tugas');
+                            }}
+                            className="p-2 rounded-xl bg-muted/40 hover:bg-blue-500/10 transition-colors cursor-pointer"
+                            title="Buka Tugas Kelas"
+                          >
+                            <span className="block font-bold text-foreground">{cls.assignmentCount}</span>
+                            <span className="text-[10px] text-muted-foreground">Tugas</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassWorkspaceTab('absensi');
+                            }}
+                            className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 font-bold hover:bg-emerald-500/20 transition-colors cursor-pointer"
+                            title="Buka Kartu QR Presensi"
+                          >
+                            <span className="block">{cls.attendancePercent}%</span>
+                            <span className="text-[10px]">Presensi</span>
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassWorkspaceTab('materi');
+                            }}
+                            className="py-2 px-3 rounded-xl bg-muted hover:bg-accent text-foreground font-bold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <BookOpen className="w-3.5 h-3.5 text-blue-600" /> Materi
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassWorkspaceTab('tugas');
+                            }}
+                            className="py-2 px-3 rounded-xl bg-muted hover:bg-accent text-foreground font-bold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <FileCheck className="w-3.5 h-3.5 text-amber-600" /> Tugas
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedClass(cls);
+                            setClassWorkspaceTab('materi');
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          Masuk Ruang Kelas <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()
+          )}
+        </div>
+      ) : (
+        /* ========================================================= */
+        /* SCREEN B2: RINGKASAN UTAMA RUANG BELAJAR SISWA (Overview) */
+        /* ========================================================= */
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Statistik Progres Belajar Siswa */}
+          {(() => {
+            const pendingTasks = allEnrolledAssignments.filter((a) => a.status === 'Belum Dikumpulkan');
+            const avgAttendance =
+              enrolledClasses.length > 0
+                ? Math.round(enrolledClasses.reduce((acc, c) => acc + c.attendancePercent, 0) / enrolledClasses.length)
+                : 100;
+
+            return (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <button
+                  type="button"
+                  onClick={() => outletContext?.setActiveNav('mata-pelajaran')}
+                  className="p-4 rounded-2xl bg-card border border-border shadow-sm hover:border-blue-500/40 transition-all text-left flex items-center justify-between cursor-pointer group"
+                >
+                  <div>
+                    <span className="block font-extrabold text-2xl text-blue-600">{enrolledClasses.length}</span>
+                    <span className="text-xs text-muted-foreground font-medium">Mata Pelajaran Diikuti</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                </button>
+
+                <div className="p-4 rounded-2xl bg-card border border-border shadow-sm text-left flex items-center justify-between">
+                  <div>
+                    <span className="block font-extrabold text-2xl text-indigo-600">{materials.length}</span>
+                    <span className="text-xs text-muted-foreground font-medium">Total Materi Tersedia</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-600 flex items-center justify-center">
+                    <FileText className="w-5 h-5" />
                   </div>
                 </div>
-              ))}
+
+                <div className="p-4 rounded-2xl bg-card border border-border shadow-sm text-left flex items-center justify-between">
+                  <div>
+                    <span className="block font-extrabold text-2xl text-amber-600">{pendingTasks.length}</span>
+                    <span className="text-xs text-muted-foreground font-medium">Tugas Aktif ({allEnrolledAssignments.length} Total)</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-card border border-border shadow-sm text-left flex items-center justify-between">
+                  <div>
+                    <span className="block font-extrabold text-2xl text-emerald-600">{avgAttendance}%</span>
+                    <span className="text-xs text-muted-foreground font-medium">Rata-rata Kehadiran</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Grid Ringkasan: Tugas Aktif/Tenggat Terdekat & Pengumuman Terbaru */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Tugas Aktif & Tenggat Waktu Terdekat */}
+            <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4 text-left">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                  <FileCheck className="w-5 h-5 text-blue-600" /> Tugas Aktif &amp; Tenggat Terdekat ({allEnrolledAssignments.length})
+                </h3>
+                <span className="text-[11px] font-semibold text-muted-foreground">Semua Kelas</span>
+              </div>
+
+              {allEnrolledAssignments.length === 0 ? (
+                <div className="p-6 text-center bg-muted/30 border border-border rounded-2xl text-xs text-muted-foreground italic">
+                  Belum ada tugas aktif pada mata pelajaran yang Anda ikuti.
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  {allEnrolledAssignments.slice(0, 6).map((ass) => {
+                    const targetCls = enrolledClasses.find(
+                      (c) => String(c.id).trim().toLowerCase() === String(ass.classId).trim().toLowerCase()
+                    );
+                    return (
+                      <div
+                        key={ass.id}
+                        className="p-4 rounded-2xl bg-muted/30 border border-border/70 hover:border-blue-500/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                              {targetCls?.name || ass.subject}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                ass.status === 'Sudah Dikumpulkan'
+                                  ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                  : 'bg-amber-500/10 text-amber-600 border border-amber-500/20'
+                              }`}
+                            >
+                              {ass.status}
+                            </span>
+                          </div>
+                          <h4 className="font-bold text-sm text-foreground">{ass.title}</h4>
+                          <p className="text-[11px] text-muted-foreground">
+                            Tenggat: <strong className="text-amber-600">{ass.dueDate}</strong>
+                            {ass.grade !== undefined ? ` • Nilai: ${ass.grade}/${ass.maxScore || 100}` : ''}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (targetCls) {
+                              setSelectedClass(targetCls);
+                              setClassWorkspaceTab('tugas');
+                            }
+                            setSelectedAssignment(ass);
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow cursor-pointer transition-all shrink-0 self-start sm:self-auto"
+                        >
+                          {ass.status === 'Sudah Dikumpulkan' ? 'Lihat Jawaban' : 'Kerjakan'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Pengumuman Terbaru */}
+            <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4 text-left">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                  <Megaphone className="w-5 h-5 text-amber-500" /> Pengumuman Terbaru ({announcements.length})
+                </h3>
+                <span className="text-[11px] font-semibold text-muted-foreground">Info Kelas</span>
+              </div>
+
+              {announcements.length === 0 ? (
+                <div className="p-6 text-center bg-muted/30 border border-border rounded-2xl text-xs text-muted-foreground italic">
+                  Belum ada pengumuman terbaru dari Guru pengampu.
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  {announcements.slice(0, 5).map((ann) => (
+                    <div key={ann.id} className="p-4 rounded-2xl bg-muted/30 border border-border/70 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <UserAvatar src={ann.teacherAvatar} name={ann.teacherName} size="sm" />
+                          <span className="text-xs font-bold text-foreground">{ann.teacherName}</span>
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{ann.createdAt}</span>
+                      </div>
+                      <h4 className="font-bold text-sm text-foreground">{ann.title}</h4>
+                      <p className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-line">{ann.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Aktivitas Kelas & Daftar Kelas Diikuti */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between border-b border-border pb-3 gap-2">
+              <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-blue-600" /> Aktivitas Kelas &amp; Mata Pelajaran Diikuti ({enrolledClasses.length})
+              </h2>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => outletContext?.setActiveNav('mata-pelajaran')}
+                  className="px-3 py-1.5 rounded-xl bg-muted hover:bg-accent text-foreground font-bold text-xs transition-all cursor-pointer"
+                >
+                  Lihat Katalog Lengkap
+                </button>
+                <button
+                  onClick={() => setShowJoinModal(true)}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <UserPlus className="w-3.5 h-3.5" /> + Gabung Kelas
+                </button>
+              </div>
+            </div>
+
+            {enrolledClasses.length === 0 ? (
+              <div className="p-12 text-center bg-card border border-border rounded-3xl space-y-4 shadow-sm">
+                <div className="w-16 h-16 rounded-full bg-blue-500/10 text-blue-600 flex items-center justify-center mx-auto">
+                  <BookOpen className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-foreground">Anda Belum Bergabung di Kelas Manapun</h3>
+                  <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                    Minta Kode Kelas acak (contoh: EDU8XK21) kepada Guru Anda, lalu tekan tombol "+ Gabung Kelas" untuk mulai belajar.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowJoinModal(true)}
+                  className="px-5 py-2.5 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-lg shadow-blue-600/30 inline-flex items-center gap-2 cursor-pointer transition-all"
+                >
+                  <UserPlus className="w-4 h-4" /> Masukkan Kode Kelas Sekarang
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {enrolledClasses.map((cls) => (
+                  <div
+                    key={cls.id}
+                    className="p-6 rounded-3xl bg-card border border-border shadow-sm hover:shadow-xl transition-all space-y-4 flex flex-col justify-between group"
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                          {cls.courseName}
+                        </span>
+                        <span className="text-[11px] font-mono font-bold text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                          {cls.code}
+                        </span>
+                      </div>
+
+                      <div>
+                        <h3 className="font-bold text-lg text-foreground group-hover:text-blue-600 transition-colors">{cls.name}</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">{cls.jurusan} • {cls.semester}</p>
+                      </div>
+
+                      <div className="flex items-center gap-2.5 pt-1">
+                        <UserAvatar src={cls.teacherAvatar} name={cls.teacherName} size="sm" />
+                        <span className="text-xs font-semibold text-foreground">{cls.teacherName}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 pt-3 border-t border-border">
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                        <div className="p-2 rounded-xl bg-muted/40">
+                          <span className="block font-bold text-foreground">{cls.materialCount}</span>
+                          <span className="text-[10px] text-muted-foreground">Materi</span>
+                        </div>
+                        <div className="p-2 rounded-xl bg-muted/40">
+                          <span className="block font-bold text-foreground">{cls.assignmentCount}</span>
+                          <span className="text-[10px] text-muted-foreground">Tugas</span>
+                        </div>
+                        <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 font-bold">
+                          <span className="block">{cls.attendancePercent}%</span>
+                          <span className="text-[10px]">Presensi</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => setSelectedClass(cls)}
+                        className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        Masuk Kelas <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

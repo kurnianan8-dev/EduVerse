@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useOutletContext } from 'react-router-dom';
+import { DashboardOutletContext } from '../../layouts/DashboardLayout';
 import {
   BookOpen,
   Users,
@@ -103,13 +104,50 @@ interface SubmissionItem {
 interface AttendanceRecord {
   id: string;
   classId?: string;
+  studentId?: string;
   studentName: string;
   avatarUrl?: string;
   jurusan: string;
   qrCode: string;
   status: 'Hadir' | 'Izin' | 'Sakit' | 'Alpa';
   scannedAt: string;
+  scannedDate: string;
+  rawTimestamp: number;
 }
+
+const getLocalDateYYYYMMDD = (dateInput: Date | string | number = new Date()): string => {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '';
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatIndonesianDateOnly = (dateInput: Date | string | number = new Date()): string => {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '-';
+  return d.toLocaleDateString('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+};
+
+const formatIndonesianDateTime = (dateInput: Date | string | number = new Date()): string => {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '-';
+  const dateStr = formatIndonesianDateOnly(d);
+  const timeStr = d
+    .toLocaleTimeString('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+    .replace(/\./g, ':');
+  return `${dateStr} - ${timeStr} WIB`;
+};
 
 interface AnnouncementItem {
   id: string;
@@ -416,10 +454,22 @@ const AssignmentSubmissionsCard: React.FC<{
 export const TeacherDashboard: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
+  const outletContext = useOutletContext<DashboardOutletContext | undefined>();
+  const activeSection = outletContext?.activeNav || new URLSearchParams(location.search).get('section') || 'overview';
 
   // Selected Class Workspace State (If open)
   const [selectedClass, setSelectedClass] = useState<ClassItem | null>(null);
   const [classTab, setClassTab] = useState<'beranda' | 'materi' | 'tugas' | 'absensi' | 'anggota'>('beranda');
+  const [sectionClassFilter, setSectionClassFilter] = useState<string>('all');
+  const [classSearchQuery, setClassSearchQuery] = useState<string>('');
+
+  // Reset selectedClass and scroll to top when sidebar menu item is clicked
+  useEffect(() => {
+    if (outletContext?.navTrigger) {
+      setSelectedClass(null);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [outletContext?.navTrigger, activeSection]);
 
   // Scanner References & States
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -429,6 +479,15 @@ export const TeacherDashboard: React.FC = () => {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [attendanceMode, setAttendanceMode] = useState<'masuk' | 'pulang'>('masuk');
+  const [attendanceNotice, setAttendanceNotice] = useState<string | null>(null);
+  const [sessionResetTimestamps, setSessionResetTimestamps] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem('eduverse_attendance_session_reset_v1');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
 
   // Main Data States (Fetched directly from Supabase DB)
   const [courses, setCourses] = useState<CourseModule[]>([]);
@@ -625,7 +684,7 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
-      // 5. Attendance Records with Real Student Profiles
+      // 5. Attendance Records with Real Student Profiles (Filtered strictly for Today's Date)
       const { data: attData } = await supabase.from('attendance_records').select('*').order('scanned_at', { ascending: false });
       if (attData && attData.length > 0) {
         const missingIds = attData.map((a: any) => a.student_id).filter((id: string) => id && !profilesMap[id]);
@@ -638,25 +697,52 @@ export const TeacherDashboard: React.FC = () => {
           }
         }
 
-        setAttendanceRecords(
-          attData.map((a: any) => {
+        const todayStr = getLocalDateYYYYMMDD(new Date());
+        let savedResetMap: Record<string, number> = {};
+        try {
+          const rawSaved = localStorage.getItem('eduverse_attendance_session_reset_v1');
+          if (rawSaved) savedResetMap = JSON.parse(rawSaved);
+        } catch {
+          // ignore
+        }
+
+        const mappedTodayRecords: AttendanceRecord[] = attData
+          .map((a: any) => {
             const prof = profilesMap[a.student_id];
             let studentName = prof?.full_name || prof?.email;
             if (!studentName || studentName.startsWith('Siswa (')) {
               studentName = prof?.full_name || prof?.email || (a.qr_code && !a.qr_code.startsWith('{') ? a.qr_code : 'Siswa');
             }
+            const rawTimeSource = a.scanned_at || a.created_at || new Date().toISOString();
+            const parsedDate = new Date(rawTimeSource);
+            const recordDateStr = getLocalDateYYYYMMDD(parsedDate);
+            const recordTimestamp = isNaN(parsedDate.getTime()) ? Date.now() : parsedDate.getTime();
+
             return {
               id: a.id,
               classId: a.class_id,
+              studentId: a.student_id,
               studentName: studentName,
               avatarUrl: prof?.avatar_url || undefined,
               jurusan: prof?.jurusan || 'Umum',
               qrCode: prof?.qr_code || a.student_id || '-',
-              status: a.status === 'pulang' ? 'Sakit' : 'Hadir',
-              scannedAt: new Date(a.scanned_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+              status: (a.status === 'pulang' ? 'Sakit' : 'Hadir') as AttendanceRecord['status'],
+              scannedAt: formatIndonesianDateTime(parsedDate),
+              scannedDate: recordDateStr,
+              rawTimestamp: recordTimestamp,
             };
           })
-        );
+          .filter((rec: AttendanceRecord) => {
+            if (rec.scannedDate !== todayStr) return false;
+            const classResetTs = rec.classId ? savedResetMap[rec.classId] || 0 : 0;
+            const globalResetTs = savedResetMap['global'] || 0;
+            const effectiveResetTs = Math.max(classResetTs, globalResetTs);
+            return rec.rawTimestamp > effectiveResetTs;
+          });
+
+        setAttendanceRecords(mappedTodayRecords);
+      } else {
+        setAttendanceRecords([]);
       }
     } catch (err) {
       console.warn('Error fetching Supabase data:', err);
@@ -944,6 +1030,10 @@ export const TeacherDashboard: React.FC = () => {
 
       const student = studentProfiles[0];
       const targetClassId = selectedClass?.id || null;
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const todayDateStr = getLocalDateYYYYMMDD(now);
+      const formattedDateTime = formatIndonesianDateTime(now);
 
       try {
         await (supabase as any).from('attendance_records').insert({
@@ -953,32 +1043,42 @@ export const TeacherDashboard: React.FC = () => {
           qr_code: student.qr_code || jsonCodeParam || cleanCode,
           attendance_type: 'qr',
           session: attendanceMode,
-          session_id: attendanceMode,
+          session_id: `${attendanceMode}_${todayDateStr}`,
           status: attendanceMode === 'pulang' ? 'pulang' : 'hadir',
-          scanned_at: new Date().toISOString(),
+          scanned_at: nowIso,
         });
       } catch (dbErr) {
         console.warn('Attendance DB insert notice:', dbErr);
       }
 
       const newRecord: AttendanceRecord = {
-        id: `att-${Date.now()}`,
+        id: `att-${now.getTime()}`,
         classId: targetClassId || undefined,
+        studentId: student.id,
         studentName: student.full_name || student.email,
         avatarUrl: student.avatar_url,
         jurusan: student.jurusan || 'Teknik / Umum',
         qrCode: student.qr_code || jsonCodeParam || cleanCode,
         status: attendanceMode === 'pulang' ? 'Sakit' : 'Hadir',
-        scannedAt: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        scannedAt: formattedDateTime,
+        scannedDate: todayDateStr,
+        rawTimestamp: now.getTime(),
       };
 
-      setAttendanceRecords((prev) => [newRecord, ...prev.filter((r) => r.qrCode !== newRecord.qrCode)]);
+      setAttendanceRecords((prev) => [
+        newRecord,
+        ...prev.filter(
+          (r) =>
+            r.scannedDate === todayDateStr &&
+            !(r.qrCode === newRecord.qrCode && (r.classId || '') === (newRecord.classId || ''))
+        ),
+      ]);
 
       setScanFeedback({
         type: 'success',
-        message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${student.full_name} (${student.jurusan || 'Umum'})`,
+        message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${student.full_name} • ${formattedDateTime}`,
       });
-      setTimeout(() => setScanFeedback(null), 3500);
+      setTimeout(() => setScanFeedback(null), 4000);
     } catch (err: any) {
       setScanFeedback({
         type: 'error',
@@ -1626,84 +1726,159 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Export Attendance to Excel (CSV)
+  // Active Today's Attendance Filter (Strict Per-Day & Active Session)
+  const todayDateYYYYMMDD = getLocalDateYYYYMMDD(new Date());
+  const todayIndonesianLabel = formatIndonesianDateOnly(new Date());
+
+  const todayActiveAttendanceRecords = attendanceRecords.filter((r) => {
+    if (r.scannedDate !== todayDateYYYYMMDD) return false;
+    const classResetTs = r.classId ? sessionResetTimestamps[r.classId] || 0 : 0;
+    const globalResetTs = sessionResetTimestamps['global'] || 0;
+    const effectiveResetTs = Math.max(classResetTs, globalResetTs);
+    return r.rawTimestamp > effectiveResetTs;
+  });
+
+  // Reset / Restart Active Attendance Session (Auto after Export or Manual Button)
+  const handleResetAttendanceSession = (targetClassId?: string, isAutoAfterExport = false) => {
+    const resetTs = Date.now();
+    const key = targetClassId || 'global';
+    const nextMap: Record<string, number> = {
+      ...sessionResetTimestamps,
+      [key]: resetTs,
+    };
+
+    setSessionResetTimestamps(nextMap);
+    try {
+      localStorage.setItem('eduverse_attendance_session_reset_v1', JSON.stringify(nextMap));
+    } catch {
+      // ignore storage errors
+    }
+
+    // Clear active attendance records from UI state for the target class (or all if global)
+    if (targetClassId) {
+      setAttendanceRecords((prev) => prev.filter((r) => r.classId && r.classId !== targetClassId));
+    } else {
+      setAttendanceRecords([]);
+    }
+
+    // Reset scanner memory so students can be scanned cleanly in the next session
+    lastScannedCodeRef.current = '';
+    lastScannedTimeRef.current = 0;
+
+    const msg = isAutoAfterExport
+      ? '✅ Rekap berhasil diunduh & Sesi Absensi otomatis di-reset (kosong) untuk pertemuan berikutnya.'
+      : '🔄 Sesi Absensi berhasil diselesaikan & di-reset. Daftar presensi kini kosong dan siap untuk sesi baru.';
+    setAttendanceNotice(msg);
+    setTimeout(() => setAttendanceNotice(null), 5000);
+  };
+
+  // Export Attendance to Excel (CSV) + Auto-Reset Session
   const handleExportExcel = () => {
     const recordsToExport = selectedClass
-      ? attendanceRecords.filter((r) => r.classId === selectedClass.id || !r.classId)
-      : attendanceRecords;
+      ? todayActiveAttendanceRecords.filter((r) => r.classId === selectedClass.id || !r.classId)
+      : todayActiveAttendanceRecords;
+
+    const classLabel = selectedClass ? `${selectedClass.name} (${selectedClass.courseName})` : 'Semua Kelas Diampu';
+    const exportTimestamp = formatIndonesianDateTime(new Date());
+
+    const headerMeta = [
+      `"LAPORAN REKAP ABSENSI SISWA - EDUVERSE LMS"`,
+      `"Tanggal Absensi","${todayIndonesianLabel} (${todayDateYYYYMMDD})"`,
+      `"Kelas / Mata Pelajaran","${classLabel}"`,
+      `"Waktu Unduh Rekap","${exportTimestamp}"`,
+      `""`,
+      `"No","Nama Siswa","Tanggal & Jam Hadir","Jurusan","Kode QR","Status Kehadiran"`,
+    ];
+
+    const dataRows = recordsToExport.map(
+      (r, idx) =>
+        `"${idx + 1}","${r.studentName}","${r.scannedAt}","${r.jurusan}","${r.qrCode}","${r.status}"`
+    );
 
     const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      ['Nama Siswa,Jurusan,Kode QR,Status,Waktu Scan']
-        .concat(recordsToExport.map((r) => `"${r.studentName}","${r.jurusan}","${r.qrCode}","${r.status}","${r.scannedAt}"`))
-        .join('\n');
+      'data:text/csv;charset=utf-8,\uFEFF' + headerMeta.concat(dataRows).join('\n');
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Rekap_Absensi_EduVerse_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Rekap_Absensi_EduVerse_${todayDateYYYYMMDD}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+
+    // Auto-reset active attendance session after Excel download
+    handleResetAttendanceSession(selectedClass?.id, true);
   };
 
-  // Export Attendance to PDF
+  // Export Attendance to PDF + Auto-Reset Session
   const handleExportPDF = () => {
     const recordsToExport = selectedClass
-      ? attendanceRecords.filter((r) => r.classId === selectedClass.id || !r.classId)
-      : attendanceRecords;
+      ? todayActiveAttendanceRecords.filter((r) => r.classId === selectedClass.id || !r.classId)
+      : todayActiveAttendanceRecords;
+
+    const classLabel = selectedClass ? `${selectedClass.name} (${selectedClass.courseName})` : 'Semua Kelas Diampu';
+    const exportTimestamp = formatIndonesianDateTime(new Date());
 
     const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Rekap Absensi Siswa - EduVerse LMS</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; color: #1e293b; }
-            h2 { color: #0284c7; margin-bottom: 5px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-            th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 12px; }
-            th { background-color: #f1f5f9; }
-          </style>
-        </head>
-        <body>
-          <h2>Laporan Rekap Absensi Siswa EduVerse</h2>
-          <p>Tanggal Laporan: ${new Date().toLocaleDateString('id-ID')}</p>
-          <table>
-            <thead>
-              <tr>
-                <th>No</th>
-                <th>Nama Siswa</th>
-                <th>Jurusan</th>
-                <th>Kode QR ID</th>
-                <th>Status Kehadiran</th>
-                <th>Waktu Scan</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${recordsToExport
-                .map(
-                  (r, index) => `
+    if (printWindow) {
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>Rekap Absensi Siswa - ${todayIndonesianLabel} - EduVerse LMS</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 24px; color: #1e293b; }
+              h2 { color: #0284c7; margin-bottom: 4px; }
+              .meta { margin-bottom: 16px; font-size: 13px; line-height: 1.6; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid #e2e8f0; }
+              table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+              th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; font-size: 12px; }
+              th { background-color: #f1f5f9; font-weight: bold; }
+            </style>
+          </head>
+          <body>
+            <h2>Laporan Rekap Absensi Siswa EduVerse</h2>
+            <div class="meta">
+              <div><strong>Tanggal Absensi:</strong> ${todayIndonesianLabel} (${todayDateYYYYMMDD})</div>
+              <div><strong>Kelas / Mata Pelajaran:</strong> ${classLabel}</div>
+              <div><strong>Waktu Cetak / Unduh:</strong> ${exportTimestamp}</div>
+              <div><strong>Total Siswa Hadir:</strong> ${recordsToExport.length} Siswa</div>
+            </div>
+            <table>
+              <thead>
                 <tr>
-                  <td>${index + 1}</td>
-                  <td>${r.studentName}</td>
-                  <td>${r.jurusan}</td>
-                  <td>${r.qrCode}</td>
-                  <td>${r.status}</td>
-                  <td>${r.scannedAt}</td>
+                  <th>No</th>
+                  <th>Nama Siswa</th>
+                  <th>Tanggal &amp; Jam Hadir</th>
+                  <th>Jurusan</th>
+                  <th>Kode QR ID</th>
+                  <th>Status Kehadiran</th>
                 </tr>
-              `
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    printWindow.print();
+              </thead>
+              <tbody>
+                ${recordsToExport
+                  .map(
+                    (r, index) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td><strong>${r.studentName}</strong></td>
+                    <td>${r.scannedAt}</td>
+                    <td>${r.jurusan}</td>
+                    <td>${r.qrCode}</td>
+                    <td>${r.status}</td>
+                  </tr>
+                `
+                  )
+                  .join('')}
+              </tbody>
+            </table>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      printWindow.print();
+    }
+
+    // Auto-reset active attendance session after PDF download/print
+    handleResetAttendanceSession(selectedClass?.id, true);
   };
 
   // Class-specific filtered data
@@ -1711,8 +1886,8 @@ export const TeacherDashboard: React.FC = () => {
   const classAssignments = selectedClass ? assignments.filter((a) => a.classId === selectedClass.id) : [];
   const classAnnouncements = selectedClass ? announcements.filter((a) => a.classId === selectedClass.id) : [];
   const classAttendanceRecords = selectedClass
-    ? attendanceRecords.filter((r) => r.classId === selectedClass.id || !r.classId)
-    : attendanceRecords;
+    ? todayActiveAttendanceRecords.filter((r) => r.classId === selectedClass.id || !r.classId)
+    : todayActiveAttendanceRecords;
 
   return (
     <div className="space-y-6 font-sans">
@@ -2003,38 +2178,58 @@ export const TeacherDashboard: React.FC = () => {
 
           {/* TAB 4: ABSENSI KELAS */}
           {classTab === 'absensi' && (
-            <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4">
-              <div className="flex items-center justify-between border-b border-border pb-3">
+            <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4 text-left">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-border pb-3 gap-3">
                 <div>
-                  <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                    <Camera className="w-5 h-5 text-amber-600" /> Presensi Kamera QR Kelas ({classAttendanceRecords.length})
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">Pemindaian Otomatis Kamera HP / Laptop & Penyimpanan ke Supabase.</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                      <Camera className="w-5 h-5 text-amber-600" /> Presensi Kamera QR Kelas ({classAttendanceRecords.length})
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                      📅 Sesi Hari Ini: {todayIndonesianLabel}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Menampilkan kehadiran khusus sesi hari ini ({todayDateYYYYMMDD}). Otomatis di-reset setelah unduh Excel/PDF.
+                  </p>
                 </div>
                 <button
                   onClick={() => setShowScanModal(true)}
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer shrink-0 self-start sm:self-auto"
                 >
                   <Camera className="w-4 h-4" /> Pindai Kamera Otomatis
                 </button>
               </div>
 
+              {attendanceNotice && (
+                <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 text-xs font-bold flex items-center justify-between gap-2 animate-in fade-in">
+                  <span>{attendanceNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceNotice(null)}
+                    className="text-emerald-600 hover:opacity-75 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
                     <tr>
-                      <th className="p-2.5">Siswa</th>
+                      <th className="p-2.5">Nama Siswa</th>
+                      <th className="p-2.5">Tanggal &amp; Jam Hadir</th>
                       <th className="p-2.5">Jurusan</th>
                       <th className="p-2.5">Kode QR</th>
                       <th className="p-2.5">Status</th>
-                      <th className="p-2.5">Waktu</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {classAttendanceRecords.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="p-4 text-center text-xs text-muted-foreground italic">
-                          Belum ada data presensi untuk kelas ini. Klik "Pindai Kamera Otomatis" untuk memindai QR Code siswa.
+                        <td colSpan={5} className="p-6 text-center text-xs text-muted-foreground italic">
+                          Belum ada data presensi untuk sesi hari ini ({todayIndonesianLabel}). Klik &quot;Pindai Kamera Otomatis&quot; untuk memindai QR Code siswa.
                         </td>
                       </tr>
                     ) : (
@@ -2044,6 +2239,12 @@ export const TeacherDashboard: React.FC = () => {
                             <UserAvatar src={r.avatarUrl} name={r.studentName} size="sm" />
                             <span>{r.studentName}</span>
                           </td>
+                          <td className="p-2.5 font-semibold text-blue-600 dark:text-blue-400">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                              <Clock className="w-3.5 h-3.5 shrink-0" />
+                              {r.scannedAt}
+                            </span>
+                          </td>
                           <td className="p-2.5 text-muted-foreground">{r.jurusan}</td>
                           <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
                           <td className="p-2.5">
@@ -2051,7 +2252,6 @@ export const TeacherDashboard: React.FC = () => {
                               {r.status}
                             </span>
                           </td>
-                          <td className="p-2.5 text-muted-foreground">{r.scannedAt}</td>
                         </tr>
                       ))
                     )}
@@ -2059,12 +2259,27 @@ export const TeacherDashboard: React.FC = () => {
                 </table>
               </div>
 
-              <div className="flex items-center gap-2 pt-2">
-                <button onClick={handleExportExcel} className="flex-1 py-2 rounded-xl bg-emerald-600/10 hover:bg-emerald-600 hover:text-white text-emerald-600 text-xs font-bold border border-emerald-500/30 transition-all cursor-pointer">
-                  📄 Unduh Excel (.CSV)
+              <div className="flex flex-wrap items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleExportExcel}
+                  className="flex-1 min-w-[160px] py-2.5 px-3 rounded-xl bg-emerald-600/10 hover:bg-emerald-600 hover:text-white text-emerald-600 text-xs font-bold border border-emerald-500/30 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  📄 Download Excel (.CSV)
                 </button>
-                <button onClick={handleExportPDF} className="flex-1 py-2 rounded-xl bg-rose-600/10 hover:bg-rose-600 hover:text-white text-rose-600 text-xs font-bold border border-rose-500/30 transition-all cursor-pointer">
-                  📑 Cetak PDF
+                <button
+                  type="button"
+                  onClick={handleExportPDF}
+                  className="flex-1 min-w-[160px] py-2.5 px-3 rounded-xl bg-rose-600/10 hover:bg-rose-600 hover:text-white text-rose-600 text-xs font-bold border border-rose-500/30 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  📑 Download / Cetak PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleResetAttendanceSession(selectedClass.id, false)}
+                  className="flex-1 min-w-[180px] py-2.5 px-3 rounded-xl bg-amber-600/10 hover:bg-amber-600 hover:text-white text-amber-600 text-xs font-bold border border-amber-500/30 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Selesai &amp; Reset Sesi Absensi
                 </button>
               </div>
             </div>
@@ -2108,11 +2323,541 @@ export const TeacherDashboard: React.FC = () => {
             </div>
           )}
         </div>
+      ) : activeSection === 'classes' ? (
+        /* ========================================================= */
+        /* SCREEN B1: MATA PELAJARAN SAYA / DAFTAR KELAS DIAMPU      */
+        /* ========================================================= */
+        <div className="space-y-6 animate-in fade-in duration-200">
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1 text-left">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-500/10 text-teal-600 border border-teal-500/20">
+                <BookOpen className="w-3.5 h-3.5" /> Manajemen Kelas &amp; Mata Pelajaran
+              </div>
+              <h2 className="text-xl font-bold text-foreground">
+                Daftar Kelas &amp; Mata Pelajaran Diampu ({classes.length})
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Kelola seluruh kelas, bagikan kode kelas kepada siswa, atau buka ruang kelas untuk mengelola materi dan tugas.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              <div className="relative">
+                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={classSearchQuery}
+                  onChange={(e) => setClassSearchQuery(e.target.value)}
+                  placeholder="Cari nama kelas / mapel / kode..."
+                  className="w-full sm:w-56 pl-9 pr-3 py-2 rounded-xl bg-muted/60 border border-border text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+              <button
+                onClick={() => setShowClassModal(true)}
+                className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
+              >
+                <Plus className="w-4 h-4" /> + Buat Kelas Baru
+              </button>
+            </div>
+          </div>
+
+          {classes.length === 0 ? (
+            <div className="p-10 text-center bg-card border border-border rounded-3xl space-y-3 text-xs text-muted-foreground">
+              <p className="italic">Belum ada kelas dibuat. Klik "+ Buat Kelas Baru" untuk memulai.</p>
+              <button
+                onClick={() => setShowClassModal(true)}
+                className="px-4 py-2 rounded-xl bg-teal-600 text-white font-bold text-xs shadow inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> + Buat Kelas Baru
+              </button>
+            </div>
+          ) : (
+            (() => {
+              const q = classSearchQuery.trim().toLowerCase();
+              const filteredCls = q
+                ? classes.filter(
+                    (c) =>
+                      c.name.toLowerCase().includes(q) ||
+                      c.courseName.toLowerCase().includes(q) ||
+                      c.code.toLowerCase().includes(q) ||
+                      (c.jurusan || '').toLowerCase().includes(q)
+                  )
+                : classes;
+
+              return filteredCls.length === 0 ? (
+                <div className="p-8 text-center bg-card border border-border rounded-3xl text-xs text-muted-foreground italic">
+                  Tidak ada kelas yang cocok dengan pencarian "{classSearchQuery}".
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredCls.map((cls) => (
+                    <div
+                      key={cls.id}
+                      className="p-6 rounded-3xl bg-card border border-border shadow-sm hover:shadow-xl transition-all space-y-4 flex flex-col justify-between group"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-500/10 text-teal-600 border border-teal-500/20">
+                            {cls.courseName}
+                          </span>
+                          <span className="text-[11px] font-mono font-bold text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                            {cls.code}
+                          </span>
+                        </div>
+
+                        <div>
+                          <h3 className="font-bold text-lg text-foreground group-hover:text-teal-600 transition-colors">{cls.name}</h3>
+                          <p className="text-xs text-muted-foreground mt-0.5">{cls.jurusan} • {cls.semester}</p>
+                        </div>
+
+                        <div className="text-xs text-muted-foreground">
+                          Siswa Terdaftar: <strong className="text-foreground">{cls.studentCount} Siswa</strong>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2.5 pt-3 border-t border-border">
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassTab('materi');
+                            }}
+                            className="py-1.5 px-2 rounded-lg bg-muted hover:bg-accent text-foreground font-semibold text-[11px] transition-colors cursor-pointer"
+                          >
+                            Materi
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassTab('tugas');
+                            }}
+                            className="py-1.5 px-2 rounded-lg bg-muted hover:bg-accent text-foreground font-semibold text-[11px] transition-colors cursor-pointer"
+                          >
+                            Tugas
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassTab('anggota');
+                            }}
+                            className="py-1.5 px-2 rounded-lg bg-muted hover:bg-accent text-foreground font-semibold text-[11px] transition-colors cursor-pointer"
+                          >
+                            Siswa
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setSelectedClass(cls);
+                              setClassTab('beranda');
+                            }}
+                            className="flex-1 py-2.5 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            Buka Kelas <ArrowRight className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setClassToDelete(cls);
+                            }}
+                            className="py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-600 text-rose-500 hover:text-white border border-rose-500/30 transition-all font-bold text-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                            title={`Hapus Kelas ${cls.name}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>Hapus Kelas</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()
+          )}
+        </div>
+      ) : activeSection === 'materials' ? (
+        /* ========================================================= */
+        /* SCREEN B2: MANAJEMEN MATERI PEMBELAJARAN GURU             */
+        /* ========================================================= */
+        <div className="space-y-6 animate-in fade-in duration-200">
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1 text-left">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                <Upload className="w-3.5 h-3.5" /> Direktori Modul &amp; Materi Guru
+              </div>
+              <h2 className="text-xl font-bold text-foreground">
+                Materi Pembelajaran ({materials.length})
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Daftar seluruh berkas materi yang telah diunggah ke kelas-kelas Anda. Pilih kelas untuk memfilter atau mengunggah materi baru.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <select
+                value={sectionClassFilter}
+                onChange={(e) => setSectionClassFilter(e.target.value)}
+                className="px-3.5 py-2 rounded-xl bg-muted/60 border border-border text-xs font-semibold text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="all">Semua Kelas ({materials.length})</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.courseName})
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const target =
+                    sectionClassFilter !== 'all'
+                      ? classes.find((c) => c.id === sectionClassFilter) || classes[0]
+                      : classes[0];
+                  if (!target) {
+                    alert('Silakan buat kelas terlebih dahulu sebelum mengunggah materi.');
+                    setShowClassModal(true);
+                    return;
+                  }
+                  setSelectedClass(target);
+                  setClassTab('materi');
+                  setShowMaterialModal(true);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
+              >
+                <Plus className="w-4 h-4" /> + Upload Materi Baru
+              </button>
+            </div>
+          </div>
+
+          {(() => {
+            const filteredMats =
+              sectionClassFilter === 'all'
+                ? materials
+                : materials.filter((m) => m.classId === sectionClassFilter);
+
+            return filteredMats.length === 0 ? (
+              <div className="p-10 text-center bg-card border border-border rounded-3xl text-muted-foreground italic text-xs space-y-2">
+                <p>Belum ada materi pembelajaran untuk filter kelas ini.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredMats.map((m) => {
+                  const clsObj = classes.find((c) => c.id === m.classId);
+                  return (
+                    <div
+                      key={m.id}
+                      className="p-5 rounded-2xl bg-card border border-border shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                            {m.fileType}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-500/10 text-teal-600 border border-teal-500/20">
+                            {clsObj?.name || m.className || 'Kelas'}
+                          </span>
+                          <span className="text-xs text-muted-foreground">{m.createdAt}</span>
+                        </div>
+                        <h4 className="font-bold text-base text-foreground">{m.title}</h4>
+                        <p className="text-xs text-muted-foreground">{m.description || m.fileName}</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {clsObj && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedClass(clsObj);
+                              setClassTab('materi');
+                            }}
+                            className="px-3 py-2 rounded-xl bg-muted hover:bg-accent text-foreground text-xs font-bold cursor-pointer"
+                          >
+                            Buka Kelas
+                          </button>
+                        )}
+                        <a
+                          href={m.fileUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Download className="w-4 h-4" /> Unduh Berkas
+                        </a>
+                        <button
+                          onClick={() => handleDeleteMaterial(m)}
+                          disabled={deletingMaterialId === m.id}
+                          className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-600 hover:text-white text-rose-500 font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50 border border-rose-500/20"
+                          title="Hapus Materi Ini"
+                        >
+                          <Trash2 className="w-4 h-4" /> {deletingMaterialId === m.id ? 'Menghapus...' : 'Hapus'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+      ) : activeSection === 'assignments' ? (
+        /* ========================================================= */
+        /* SCREEN B3: MANAJEMEN TUGAS & PENILAIAN SISWA              */
+        /* ========================================================= */
+        <div className="space-y-6 animate-in fade-in duration-200 text-left">
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                <Award className="w-3.5 h-3.5" /> Evaluasi &amp; Penilaian Tugas
+              </div>
+              <h2 className="text-xl font-bold text-foreground">
+                Tugas &amp; Penilaian Siswa ({assignments.length})
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Kelola seluruh tugas kelas, periksa berkas jawaban siswa, berikan nilai, atau hapus tugas.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <select
+                value={sectionClassFilter}
+                onChange={(e) => setSectionClassFilter(e.target.value)}
+                className="px-3.5 py-2 rounded-xl bg-muted/60 border border-border text-xs font-semibold text-foreground focus:outline-none focus:ring-2 focus:ring-teal-500"
+              >
+                <option value="all">Semua Kelas ({assignments.length})</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.courseName})
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const target =
+                    sectionClassFilter !== 'all'
+                      ? classes.find((c) => c.id === sectionClassFilter) || classes[0]
+                      : classes[0];
+                  if (!target) {
+                    alert('Silakan buat kelas terlebih dahulu sebelum membuat tugas baru.');
+                    setShowClassModal(true);
+                    return;
+                  }
+                  setSelectedClass(target);
+                  setClassTab('tugas');
+                  setShowAssignmentModal(true);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
+              >
+                <Plus className="w-4 h-4" /> + Buat Tugas Baru
+              </button>
+            </div>
+          </div>
+
+          {(() => {
+            const filteredAss =
+              sectionClassFilter === 'all'
+                ? assignments
+                : assignments.filter((a) => a.classId === sectionClassFilter);
+
+            return filteredAss.length === 0 ? (
+              <div className="p-10 text-center bg-card border border-border rounded-3xl text-muted-foreground italic text-xs space-y-2">
+                <p>Belum ada tugas dibuat untuk filter kelas ini.</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {filteredAss.map((a) => (
+                  <AssignmentSubmissionsCard
+                    key={a.id}
+                    assignment={a}
+                    enrolledStudents={enrolledStudents}
+                    onGradeClick={(sub) => {
+                      setSelectedSubmission(sub);
+                      setGradeInput(sub.grade !== undefined ? sub.grade : '');
+                      setFeedbackInput(sub.feedback || '');
+                    }}
+                    onDeleteAssignment={(ass, count) => handleDeleteAssignment(ass, count)}
+                    isDeleting={deletingAssignmentId === a.id}
+                  />
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      ) : activeSection === 'students' ? (
+        /* ========================================================= */
+        /* SCREEN B4: DATA SISWA TERDAFTAR & REKAP PRESENSI          */
+        /* ========================================================= */
+        <div className="space-y-6 animate-in fade-in duration-200 text-left">
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/10 text-indigo-600 border border-indigo-500/20">
+                <Users className="w-3.5 h-3.5" /> Direktori Siswa &amp; Kehadiran
+              </div>
+              <h2 className="text-xl font-bold text-foreground">
+                Data Siswa &amp; Rekap Presensi ({classes.reduce((acc, c) => acc + c.studentCount, 0)} Siswa)
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Pilih kelas di bawah untuk melihat daftar anggota siswa atau memindai QR Code presensi kelas.
+              </p>
+            </div>
+          </div>
+
+          {/* Ringkasan Anggota per Kelas */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {classes.map((cls) => (
+              <div
+                key={cls.id}
+                className="p-5 rounded-2xl bg-card border border-border shadow-sm flex flex-col justify-between gap-4"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-indigo-500/10 text-indigo-600">
+                      {cls.courseName}
+                    </span>
+                    <span className="text-[11px] font-mono font-bold text-blue-600">{cls.code}</span>
+                  </div>
+                  <h4 className="font-bold text-base text-foreground">{cls.name}</h4>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Total Anggota: <strong className="text-foreground">{cls.studentCount} Siswa</strong>
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-border">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedClass(cls);
+                      setClassTab('anggota');
+                    }}
+                    className="py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <Users className="w-3.5 h-3.5" /> Data Siswa
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedClass(cls);
+                      setClassTab('absensi');
+                    }}
+                    className="py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <Camera className="w-3.5 h-3.5" /> Absensi QR
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Tabel Rekap Presensi Lintas Kelas (Sesi Hari Ini) */}
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-border pb-3 gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                    <Camera className="w-5 h-5 text-amber-600" /> Presensi QR Siswa Sesi Hari Ini ({todayActiveAttendanceRecords.length})
+                  </h3>
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                    📅 {todayIndonesianLabel}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Daftar kehadiran khusus sesi hari ini ({todayDateYYYYMMDD}). Otomatis di-reset setelah unduh Excel/PDF.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleExportExcel}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600/10 hover:bg-emerald-600 hover:text-white text-emerald-600 text-xs font-bold border border-emerald-500/30 transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  📄 Download Excel (.CSV)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportPDF}
+                  className="px-3.5 py-2 rounded-xl bg-rose-600/10 hover:bg-rose-600 hover:text-white text-rose-600 text-xs font-bold border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  📑 Download / Cetak PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleResetAttendanceSession(undefined, false)}
+                  className="px-3.5 py-2 rounded-xl bg-amber-600/10 hover:bg-amber-600 hover:text-white text-amber-600 text-xs font-bold border border-amber-500/30 transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Selesai &amp; Reset Sesi Absensi
+                </button>
+              </div>
+            </div>
+
+            {attendanceNotice && (
+              <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 text-xs font-bold flex items-center justify-between gap-2 animate-in fade-in">
+                <span>{attendanceNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setAttendanceNotice(null)}
+                  className="text-emerald-600 hover:opacity-75 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                  <tr>
+                    <th className="p-2.5">Nama Siswa</th>
+                    <th className="p-2.5">Tanggal &amp; Jam Hadir</th>
+                    <th className="p-2.5">Jurusan</th>
+                    <th className="p-2.5">Kode QR</th>
+                    <th className="p-2.5">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {todayActiveAttendanceRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-6 text-center text-xs text-muted-foreground italic">
+                        Belum ada data presensi tercatat untuk sesi hari ini ({todayIndonesianLabel}). Pilih kelas dan klik &quot;Absensi QR&quot; untuk memindai QR Code siswa.
+                      </td>
+                    </tr>
+                  ) : (
+                    todayActiveAttendanceRecords.map((r) => (
+                      <tr key={r.id} className="hover:bg-muted/30">
+                        <td className="p-2.5 flex items-center gap-2 font-bold text-foreground">
+                          <UserAvatar src={r.avatarUrl} name={r.studentName} size="sm" />
+                          <span>{r.studentName}</span>
+                        </td>
+                        <td className="p-2.5 font-semibold text-blue-600 dark:text-blue-400">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                            <Clock className="w-3.5 h-3.5 shrink-0" />
+                            {r.scannedAt}
+                          </span>
+                        </td>
+                        <td className="p-2.5 text-muted-foreground">{r.jurusan}</td>
+                        <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
+                        <td className="p-2.5">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
+                            {r.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       ) : (
         /* ========================================================= */
-        /* SCREEN B: MAIN OVERVIEW DASBOR UTAMA GURU (Default View) */
+        /* SCREEN B5: MAIN OVERVIEW DASBOR UTAMA GURU (Default View) */
         /* ========================================================= */
-        <div className="space-y-6">
+        <div className="space-y-6 animate-in fade-in duration-200">
           {/* Header Banner */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-6 rounded-3xl bg-gradient-to-r from-teal-900 via-emerald-950 to-slate-900 text-white shadow-xl border border-teal-500/20">
             <div>
@@ -2141,31 +2886,47 @@ export const TeacherDashboard: React.FC = () => {
 
           {/* Quick Overview Cards Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div className="p-4 rounded-2xl bg-card border border-border shadow-sm text-center">
+            <button
+              type="button"
+              onClick={() => outletContext?.setActiveNav('classes')}
+              className="p-4 rounded-2xl bg-card border border-border shadow-sm hover:border-teal-500/40 transition-all text-center cursor-pointer"
+            >
               <span className="block font-extrabold text-2xl text-teal-600">{classes.length}</span>
               <span className="text-xs text-muted-foreground">Kelas Aktif</span>
-            </div>
-            <div className="p-4 rounded-2xl bg-card border border-border shadow-sm text-center">
+            </button>
+            <button
+              type="button"
+              onClick={() => outletContext?.setActiveNav('materials')}
+              className="p-4 rounded-2xl bg-card border border-border shadow-sm hover:border-emerald-500/40 transition-all text-center cursor-pointer"
+            >
               <span className="block font-extrabold text-2xl text-emerald-600">{materials.length}</span>
               <span className="text-xs text-muted-foreground">Total Materi</span>
-            </div>
-            <div className="p-4 rounded-2xl bg-card border border-border shadow-sm text-center">
+            </button>
+            <button
+              type="button"
+              onClick={() => outletContext?.setActiveNav('assignments')}
+              className="p-4 rounded-2xl bg-card border border-border shadow-sm hover:border-blue-500/40 transition-all text-center cursor-pointer"
+            >
               <span className="block font-extrabold text-2xl text-blue-600">{assignments.length}</span>
               <span className="text-xs text-muted-foreground">Total Tugas</span>
-            </div>
-            <div className="p-4 rounded-2xl bg-card border border-border shadow-sm text-center">
+            </button>
+            <button
+              type="button"
+              onClick={() => outletContext?.setActiveNav('students')}
+              className="p-4 rounded-2xl bg-card border border-border shadow-sm hover:border-indigo-500/40 transition-all text-center cursor-pointer"
+            >
               <span className="block font-extrabold text-2xl text-indigo-600">
                 {classes.reduce((acc, c) => acc + c.studentCount, 0)}
               </span>
               <span className="text-xs text-muted-foreground">Siswa Terdaftar</span>
-            </div>
+            </button>
           </div>
 
           {/* Catalog Kelas Guru (Grid View) */}
           <div className="p-6 rounded-3xl bg-card border border-border shadow-sm space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-                <Users className="w-5 h-5 text-teal-600" /> Kelas & Rombel Pembelajaran Guru ({classes.length})
+                <Users className="w-5 h-5 text-teal-600" /> Kelas &amp; Rombel Pembelajaran Guru ({classes.length})
               </h3>
               <button
                 onClick={() => setShowClassModal(true)}

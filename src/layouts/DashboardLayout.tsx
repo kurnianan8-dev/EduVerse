@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { AppRole, ROLE_LABELS } from '../types/auth.types';
@@ -22,13 +22,22 @@ import {
   Shield,
   Clock,
   User,
+  FileText,
 } from 'lucide-react';
 
 import { UserAvatar } from '../components/common/UserAvatar';
 
+export interface DashboardOutletContext {
+  activeNav: string;
+  setActiveNav: (navId: string) => void;
+  navTrigger: number;
+}
+
 interface NavItem {
+  id: string;
   label: string;
   href: string;
+  basePath: string;
   icon: React.ElementType;
   roles: AppRole[];
   badge?: string;
@@ -36,12 +45,15 @@ interface NavItem {
 
 const NAVIGATION_ITEMS: NavItem[] = [
   // Teacher / Guru Navigation
-  { label: 'Dasbor Guru', href: '/dashboard/guru', icon: LayoutDashboard, roles: ['guru', 'teacher'] },
-  { label: 'Mata Pelajaran Saya', href: '/dashboard/guru', icon: BookOpen, roles: ['guru', 'teacher'] },
+  { id: 'overview', label: 'Dasbor Guru', href: '/dashboard/guru?section=overview', basePath: '/dashboard/guru', icon: LayoutDashboard, roles: ['guru', 'teacher'] },
+  { id: 'classes', label: 'Mata Pelajaran Saya', href: '/dashboard/guru?section=classes', basePath: '/dashboard/guru', icon: BookOpen, roles: ['guru', 'teacher'] },
+  { id: 'materials', label: 'Materi Pembelajaran', href: '/dashboard/guru?section=materials', basePath: '/dashboard/guru', icon: FileText, roles: ['guru', 'teacher'] },
+  { id: 'assignments', label: 'Tugas & Penilaian', href: '/dashboard/guru?section=assignments', basePath: '/dashboard/guru', icon: Award, roles: ['guru', 'teacher'] },
+  { id: 'students', label: 'Data Siswa & Presensi', href: '/dashboard/guru?section=students', basePath: '/dashboard/guru', icon: Users, roles: ['guru', 'teacher'] },
 
   // Student / Siswa Navigation
-  { label: 'Ruang Belajar Siswa', href: '/dashboard/siswa', icon: StudentIcon, roles: ['siswa', 'student'] },
-  { label: 'Mata Pelajaran Diikuti', href: '/dashboard/siswa', icon: BookOpen, roles: ['siswa', 'student'] },
+  { id: 'ruang-belajar', label: 'Ruang Belajar Siswa', href: '/dashboard/siswa?section=ruang-belajar', basePath: '/dashboard/siswa', icon: StudentIcon, roles: ['siswa', 'student'] },
+  { id: 'mata-pelajaran', label: 'Mata Pelajaran Diikuti', href: '/dashboard/siswa?section=mata-pelajaran', basePath: '/dashboard/siswa', icon: BookOpen, roles: ['siswa', 'student'] },
 ];
 
 export const DashboardLayout: React.FC = () => {
@@ -51,14 +63,50 @@ export const DashboardLayout: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const defaultNavForRole = role === 'siswa' || role === 'student' ? 'ruang-belajar' : 'overview';
+  const [activeNav, setActiveNavState] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('section') || defaultNavForRole;
+  });
+  const [navTrigger, setNavTrigger] = useState<number>(0);
+
   const roleStyle = getRoleBadgeStyle(role);
 
   const filteredNavItems = NAVIGATION_ITEMS.filter((item) => item.roles.includes(role));
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const section = params.get('section');
+    const validIds = filteredNavItems.map((i) => i.id);
+    if (section && validIds.includes(section)) {
+      setActiveNavState(section);
+    } else if (!validIds.includes(activeNav)) {
+      setActiveNavState(defaultNavForRole);
+    }
+  }, [location.search, role]);
+
+  const handleNavClick = (item: NavItem) => {
+    setActiveNavState(item.id);
+    setNavTrigger((prev) => prev + 1);
+    setMobileMenuOpen(false);
+    navigate(item.href);
+  };
+
+  const setActiveNav = (navId: string) => {
+    const targetItem = filteredNavItems.find((i) => i.id === navId);
+    setActiveNavState(navId);
+    setNavTrigger((prev) => prev + 1);
+    if (targetItem) {
+      navigate(targetItem.href);
+    }
+  };
 
   const handleRoleSwitch = (newRole: AppRole) => {
     switchRole(newRole);
     navigate(`/dashboard/${newRole.replace('_', '-')}`);
   };
+
+  const isProfilePage = location.pathname.includes('/profile');
 
   return (
     <div className="min-h-screen flex bg-background text-foreground font-sans">
@@ -97,20 +145,21 @@ export const DashboardLayout: React.FC = () => {
             Menu Navigasi
           </div>
           {filteredNavItems.map((item) => {
-            const isActive = location.pathname === item.href;
+            const isActive = !isProfilePage && activeNav === item.id;
             const Icon = item.icon;
             return (
-              <Link
-                key={item.href}
-                to={item.href}
-                className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleNavClick(item)}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer text-left ${
                   isActive
-                    ? 'bg-primary text-primary-foreground font-semibold shadow-md shadow-primary/20'
-                    : 'text-slate-300 hover:bg-sidebar-accent hover:text-white'
+                    ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/25'
+                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <Icon className="w-4 h-4" />
+                  <Icon className="w-4 h-4 shrink-0" />
                   <span>{item.label}</span>
                 </div>
                 {item.badge && (
@@ -118,7 +167,7 @@ export const DashboardLayout: React.FC = () => {
                     {item.badge}
                   </span>
                 )}
-              </Link>
+              </button>
             );
           })}
         </nav>
@@ -208,17 +257,22 @@ export const DashboardLayout: React.FC = () => {
           <div className="lg:hidden fixed inset-0 z-40 bg-background/80 backdrop-blur-md flex flex-col pt-16 px-6 pb-6">
             <nav className="space-y-2 flex-1">
               {filteredNavItems.map((item) => {
+                const isActive = !isProfilePage && activeNav === item.id;
                 const Icon = item.icon;
                 return (
-                  <Link
-                    key={item.href}
-                    to={item.href}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold bg-accent text-foreground"
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleNavClick(item)}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all cursor-pointer text-left ${
+                      isActive
+                        ? 'bg-blue-600 text-white shadow-md shadow-blue-600/25'
+                        : 'text-slate-300 hover:bg-slate-800/60 hover:text-white bg-card/80 border border-border'
+                    }`}
                   >
-                    <Icon className="w-5 h-5 text-primary" />
+                    <Icon className="w-5 h-5 shrink-0" />
                     <span>{item.label}</span>
-                  </Link>
+                  </button>
                 );
               })}
             </nav>
@@ -227,7 +281,7 @@ export const DashboardLayout: React.FC = () => {
 
         {/* Main Content Area */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
-          <Outlet />
+          <Outlet context={{ activeNav, setActiveNav, navTrigger } satisfies DashboardOutletContext} />
         </main>
       </div>
     </div>
