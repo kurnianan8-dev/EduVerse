@@ -142,12 +142,119 @@ export const StudentDashboard: React.FC = () => {
   const [selectedSubmissionFile, setSelectedSubmissionFile] = useState<File | null>(null);
   const [submittedList, setSubmittedList] = useState<Record<string, { grade?: number; feedback?: string; fileUrl?: string; fileName?: string; submittedAt?: string }>>({});
 
-  // Toast Notification
+  // Toast Notification & Student Profile / Attendance States
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [qrGeneratedAt, setQrGeneratedAt] = useState<Date>(() => new Date());
+  const [studentProfile, setStudentProfile] = useState<Record<string, any> | null>(null);
+  const [authUserMeta, setAuthUserMeta] = useState<Record<string, any> | null>(null);
 
-  const studentQrCode = user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '001'}`;
-  const studentJurusan = user?.jurusan || 'Teknik / Umum';
+  const isPlaceholderStudentName = (val?: string | null): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const clean = val.trim().toLowerCase();
+    return (
+      !clean ||
+      clean === '-' ||
+      clean === 'siswa' ||
+      clean === 'anonim' ||
+      clean === 'pengguna eduverse' ||
+      clean === 'akun pengguna' ||
+      clean === 'guru eduverse' ||
+      clean === 'unknown'
+    );
+  };
+
+  const isGenericMajorLabel = (val?: string | null): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const clean = val.trim().toLowerCase();
+    return (
+      !clean ||
+      clean === '-' ||
+      clean === 'umum' ||
+      clean === 'teknik / umum' ||
+      clean === 'semua jurusan' ||
+      clean === 'unknown' ||
+      clean === 'null' ||
+      clean === 'undefined'
+    );
+  };
+
+  const resolveStudentFullName = (
+    prof?: Record<string, any> | null,
+    meta?: Record<string, any> | null,
+    fallbackEmail?: string | null
+  ): string => {
+    const emailStr = prof?.email || fallbackEmail || user?.email || '';
+    const emailPrefix = emailStr ? String(emailStr).split('@')[0] : '';
+    const candidates = [
+      prof?.full_name,
+      prof?.name,
+      meta?.full_name,
+      meta?.name,
+      user?.fullName,
+      emailPrefix,
+    ];
+    for (const c of candidates) {
+      if (c && typeof c === 'string' && !isPlaceholderStudentName(c)) {
+        return c.trim();
+      }
+    }
+    return emailPrefix || 'Siswa EduVerse';
+  };
+
+  const resolveStudentMajorOrClass = (
+    prof?: Record<string, any> | null,
+    meta?: Record<string, any> | null,
+    currentCls?: EnrolledClass | Record<string, any> | null
+  ): string => {
+    const targetCls: any = currentCls || selectedClass || enrolledClasses[0] || null;
+    const profileCandidates = [
+      prof?.major,
+      prof?.department,
+      prof?.class_name,
+      prof?.jurusan,
+      meta?.major,
+      meta?.department,
+      meta?.class_name,
+      meta?.jurusan,
+      user?.jurusan,
+    ];
+    for (const cand of profileCandidates) {
+      if (cand && typeof cand === 'string' && !isGenericMajorLabel(cand)) {
+        return cand.trim();
+      }
+    }
+
+    if (targetCls) {
+      const clsMajor = targetCls.major || targetCls.department || targetCls.jurusan || '';
+      const clsName = (targetCls.name || '').replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
+      if (clsMajor && !isGenericMajorLabel(clsMajor) && clsName) {
+        return clsName.toLowerCase().includes(clsMajor.toLowerCase())
+          ? clsName
+          : `${clsMajor} (${clsName})`;
+      }
+      if (clsMajor && !isGenericMajorLabel(clsMajor)) {
+        return String(clsMajor).trim();
+      }
+      if (clsName) {
+        return clsName;
+      }
+      if (targetCls.courseName) {
+        return targetCls.courseName;
+      }
+    }
+
+    return 'Program Keahlian SMK';
+  };
+
+  const studentQrCode =
+    studentProfile?.qr_code || user?.qrCode || `EDU-SISWA-${user?.id?.slice(0, 8) || '001'}`;
+  const resolvedStudentName = resolveStudentFullName(studentProfile, authUserMeta, user?.email);
+  const studentJurusan = resolveStudentMajorOrClass(
+    studentProfile,
+    authUserMeta,
+    selectedClass || enrolledClasses[0]
+  );
+
   const studentTodayYYYYMMDD = `${qrGeneratedAt.getFullYear()}-${String(qrGeneratedAt.getMonth() + 1).padStart(2, '0')}-${String(qrGeneratedAt.getDate()).padStart(2, '0')}`;
   const studentTodayIndonesian = `${qrGeneratedAt.toLocaleDateString('id-ID', {
     weekday: 'long',
@@ -267,16 +374,127 @@ export const StudentDashboard: React.FC = () => {
     }
   };
 
+  // Fetch & sync full student profile (full_name, major, class_name, qr_code) and backfill attendance_records
   const ensureStudentQrCodeInSupabase = async () => {
     if (!user?.id) return;
     try {
+      const { data: authData } = await supabase.auth.getUser();
+      const authUser = authData?.user || null;
+      const meta = authUser?.user_metadata || null;
+      if (meta) setAuthUserMeta(meta);
+
       const generatedQr = `EDU-SISWA-${user.id.slice(0, 8)}`;
-      const { data: profile } = await supabase.from('profiles').select('qr_code').eq('id', user.id).single();
-      if (!(profile as any)?.qr_code) {
-        await (supabase as any).from('profiles').update({ qr_code: generatedQr }).eq('id', user.id);
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profile) {
+        setStudentProfile(profile as Record<string, any>);
       }
+
+      const activeClass = selectedClass || enrolledClasses[0] || null;
+      const syncedName = resolveStudentFullName(profile as any, meta, authUser?.email || user.email);
+      const syncedMajor = resolveStudentMajorOrClass(profile as any, meta, activeClass);
+      const syncedClassName = activeClass?.name || (profile as any)?.class_name || syncedMajor;
+      const finalQr = (profile as any)?.qr_code || generatedQr;
+
+      // Upsert full student details to public.profiles so TeacherDashboard lookup always finds Name & Major/Class
+      const profileUpdatePayload: Record<string, any> = {
+        id: user.id,
+        email: (profile as any)?.email || authUser?.email || user.email || '',
+        full_name: syncedName,
+        qr_code: finalQr,
+        major: syncedMajor,
+        class_name: syncedClassName,
+        role: (profile as any)?.role || 'student',
+      };
+
+      const { error: upsertErr } = await (supabase as any)
+        .from('profiles')
+        .upsert(profileUpdatePayload);
+
+      if (upsertErr) {
+        // Fallback if major / class_name columns are not added yet
+        await (supabase as any)
+          .from('profiles')
+          .upsert({
+            id: user.id,
+            email: (profile as any)?.email || authUser?.email || user.email || '',
+            full_name: syncedName,
+            qr_code: finalQr,
+            role: (profile as any)?.role || 'student',
+          });
+      }
+
+      // Backfill any existing attendance_records for this student that have empty/generic student_name or student_major
+      (supabase as any)
+        .from('attendance_records')
+        .update({
+          student_name: syncedName,
+          student_major: syncedMajor,
+        })
+        .eq('student_id', user.id)
+        .or('student_name.is.null,student_name.eq.,student_name.eq.Siswa,student_major.is.null,student_major.eq.,student_major.eq.Umum')
+        .then(() => {});
     } catch (err) {
       console.warn('Syncing QR Code profile warning:', err);
+    }
+  };
+
+  // Helper to save complete student attendance record (with student_name & student_major) when student scans/checks in
+  const recordStudentAttendanceInSupabase = async (targetCls?: EnrolledClass | null) => {
+    if (!user?.id) return;
+    const currentClass = targetCls || selectedClass || enrolledClasses[0] || null;
+    const { data: authData } = await supabase.auth.getUser();
+    const authUser = authData?.user || null;
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const finalStudentName =
+      (profile as any)?.full_name ||
+      (profile as any)?.name ||
+      authUser?.user_metadata?.full_name ||
+      authUser?.user_metadata?.name ||
+      user?.fullName ||
+      (authUser?.email || user?.email || '').split('@')[0] ||
+      'Siswa';
+
+    const finalStudentMajor =
+      (profile as any)?.major ||
+      (profile as any)?.department ||
+      (profile as any)?.class_name ||
+      authUser?.user_metadata?.major ||
+      (currentClass as any)?.major ||
+      (currentClass as any)?.department ||
+      (!isGenericMajorLabel(currentClass?.jurusan) ? currentClass?.jurusan : '') ||
+      currentClass?.name ||
+      studentJurusan;
+
+    const nowIso = new Date().toISOString();
+    const payload: Record<string, any> = {
+      student_id: user.id,
+      class_id: currentClass?.id || null,
+      student_name: finalStudentName,
+      student_major: finalStudentMajor,
+      qr_code: studentQrCode,
+      status: 'hadir',
+      scanned_at: nowIso,
+    };
+
+    const { error } = await (supabase as any).from('attendance_records').insert(payload);
+    if (error && (error.message?.includes('student_name') || error.message?.includes('student_major'))) {
+      await (supabase as any).from('attendance_records').insert({
+        student_id: user.id,
+        class_id: currentClass?.id || null,
+        qr_code: studentQrCode,
+        status: 'hadir',
+        scanned_at: nowIso,
+      });
     }
   };
 
@@ -958,7 +1176,7 @@ export const StudentDashboard: React.FC = () => {
       }
       const pngUrl = canvas.toDataURL('image/png');
       const downloadLink = document.createElement('a');
-      const safeName = (user?.fullName || user?.email || 'Siswa').replace(/[^a-zA-Z0-9]/g, '_');
+      const safeName = (resolvedStudentName || user?.email || 'Siswa').replace(/[^a-zA-Z0-9]/g, '_');
       downloadLink.href = pngUrl;
       downloadLink.download = `QR_Absensi_${safeName}.png`;
       document.body.appendChild(downloadLink);
@@ -1003,10 +1221,10 @@ export const StudentDashboard: React.FC = () => {
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-display font-extrabold text-white pt-1">
-            Selamat Datang, {user?.fullName || user?.email || 'Siswa'}
+            Selamat Datang, {resolvedStudentName}
           </h1>
           <p className="text-xs text-slate-300">
-            Jurusan: <strong className="text-blue-300">{studentJurusan}</strong> • Institusi: <strong className="text-blue-300">{user?.schoolName || 'SMK EduVerse'}</strong>
+            Jurusan / Kelas: <strong className="text-blue-300">{studentJurusan}</strong> • Institusi: <strong className="text-blue-300">{user?.schoolName || 'SMK EduVerse'}</strong>
           </p>
         </div>
 
@@ -1256,9 +1474,12 @@ export const StudentDashboard: React.FC = () => {
                       value={JSON.stringify({
                         sid: user?.id || '',
                         code: studentQrCode,
-                        name: user?.fullName || '',
+                        name: resolvedStudentName,
+                        student_name: resolvedStudentName,
                         email: user?.email || '',
                         jurusan: studentJurusan,
+                        student_major: studentJurusan,
+                        class_name: selectedClass?.name || '',
                         classId: selectedClass?.id || '',
                         date: studentTodayYYYYMMDD,
                       })}
@@ -1271,10 +1492,10 @@ export const StudentDashboard: React.FC = () => {
                   </div>
                 </div>
                 <div className="border-t border-slate-200 pt-3 flex items-center justify-center gap-3 text-left">
-                  <UserAvatar src={user?.avatarUrl} name={user?.fullName} size="md" />
+                  <UserAvatar src={user?.avatarUrl} name={resolvedStudentName} size="md" />
                   <div>
-                    <p className="font-bold text-base text-slate-900">{user?.fullName || user?.email || 'Siswa'}</p>
-                    <p className="text-xs text-slate-600 font-medium">Jurusan: {studentJurusan}</p>
+                    <p className="font-bold text-base text-slate-900">{resolvedStudentName}</p>
+                    <p className="text-xs text-slate-600 font-medium">Jurusan / Kelas: {studentJurusan}</p>
                     <span className="inline-block px-2.5 py-0.5 mt-1 rounded-full text-[11px] font-mono font-bold bg-blue-100 text-blue-700">
                       {studentQrCode}
                     </span>
@@ -1287,7 +1508,8 @@ export const StudentDashboard: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setQrGeneratedAt(new Date());
-                    showToastNotification('info', '🔄 Timestamp Sesi QR Presensi berhasil diperbarui ke waktu saat ini.');
+                    ensureStudentQrCodeInSupabase();
+                    showToastNotification('info', '🔄 Data & Timestamp Sesi QR Presensi berhasil diperbarui.');
                   }}
                   className="flex-1 py-3 px-4 rounded-xl bg-muted hover:bg-accent text-foreground font-bold text-xs border border-border flex items-center justify-center gap-2 cursor-pointer transition-all"
                 >

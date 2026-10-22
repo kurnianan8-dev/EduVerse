@@ -544,6 +544,136 @@ export const TeacherDashboard: React.FC = () => {
   };
 
   const currentTeacherDisplayName = resolveTeacherRealName(null, null, null);
+
+  const isPlaceholderStudentName = (val?: string | null): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const clean = val.trim().toLowerCase();
+    return (
+      !clean ||
+      clean === '-' ||
+      clean === 'siswa' ||
+      clean === 'anonim' ||
+      clean === 'pengguna eduverse' ||
+      clean === 'akun pengguna' ||
+      clean === 'guru eduverse' ||
+      clean === 'unknown' ||
+      clean === 'null' ||
+      clean === 'undefined' ||
+      clean.startsWith('siswa (') ||
+      clean.startsWith('edu-siswa-') ||
+      clean.startsWith('{')
+    );
+  };
+
+  const isGenericMajorLabel = (val?: string | null): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const clean = val.trim().toLowerCase();
+    return (
+      !clean ||
+      clean === '-' ||
+      clean === 'umum' ||
+      clean === 'teknik / umum' ||
+      clean === 'semua jurusan' ||
+      clean === 'unknown' ||
+      clean === 'null' ||
+      clean === 'undefined'
+    );
+  };
+
+  // Resolve real student name across attendance row, profiles, enrolledStudents, and QR JSON payload
+  const resolveStudentDisplayName = (
+    attRow?: Record<string, any> | null,
+    prof?: Record<string, any> | null,
+    enrolledSt?: EnrolledStudent | null,
+    qrParsed?: Record<string, any> | null
+  ): string => {
+    const profEmailPrefix = prof?.email ? String(prof.email).split('@')[0] : '';
+    const qrEmailPrefix = qrParsed?.email ? String(qrParsed.email).split('@')[0] : '';
+    const enrolledEmailPrefix =
+      enrolledSt?.email && enrolledSt.email !== '-' ? String(enrolledSt.email).split('@')[0] : '';
+
+    const candidates = [
+      prof?.full_name,
+      prof?.name,
+      attRow?.student_name,
+      qrParsed?.student_name,
+      qrParsed?.name,
+      qrParsed?.full_name,
+      enrolledSt?.fullName,
+      profEmailPrefix,
+      qrEmailPrefix,
+      enrolledEmailPrefix,
+    ];
+
+    for (const c of candidates) {
+      if (c && typeof c === 'string' && !isPlaceholderStudentName(c)) {
+        return c.trim();
+      }
+    }
+
+    const fallbackId = String(attRow?.student_id || prof?.id || qrParsed?.sid || '').slice(0, 8);
+    return fallbackId ? `Siswa (${fallbackId})` : 'Siswa Terdaftar';
+  };
+
+  // Resolve real student major / class name across profiles, attendance row, QR JSON, enrolledStudents, and classes
+  const resolveStudentMajorOrClass = (
+    attRow?: Record<string, any> | null,
+    prof?: Record<string, any> | null,
+    enrolledSt?: EnrolledStudent | null,
+    clsObj?: Record<string, any> | null,
+    qrParsed?: Record<string, any> | null
+  ): string => {
+    const directCandidates = [
+      prof?.major,
+      prof?.department,
+      prof?.class_name,
+      prof?.jurusan,
+      attRow?.student_major,
+      attRow?.class_name,
+      attRow?.jurusan,
+      qrParsed?.student_major,
+      qrParsed?.major,
+      qrParsed?.department,
+      qrParsed?.class_name,
+      qrParsed?.jurusan,
+      enrolledSt?.jurusan,
+    ];
+
+    for (const cand of directCandidates) {
+      if (cand && typeof cand === 'string' && !isGenericMajorLabel(cand)) {
+        return cand.trim();
+      }
+    }
+
+    const targetCls: any = clsObj || selectedClass || null;
+    if (targetCls) {
+      const clsMajor = targetCls.major || targetCls.department || targetCls.jurusan || '';
+      const clsCleanName = String(targetCls.name || '')
+        .replace(/\s*\[[A-Z0-9-]+\]/i, '')
+        .trim();
+
+      if (clsMajor && !isGenericMajorLabel(clsMajor) && clsCleanName) {
+        return clsCleanName.toLowerCase().includes(String(clsMajor).toLowerCase())
+          ? clsCleanName
+          : `${clsMajor} (${clsCleanName})`;
+      }
+      if (clsMajor && !isGenericMajorLabel(clsMajor)) {
+        return String(clsMajor).trim();
+      }
+      if (clsCleanName) {
+        return clsCleanName;
+      }
+      if (targetCls.courseName || targetCls.course_name) {
+        return String(targetCls.courseName || targetCls.course_name).trim();
+      }
+    }
+
+    return 'Program Keahlian SMK';
+  };
+
+  const allProfilesCacheRef = useRef<Record<string, any>>({});
+  const studentEnrolledClassCacheRef = useRef<Record<string, any>>({});
+
   const [sessionResetTimestamps, setSessionResetTimestamps] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem('eduverse_attendance_session_reset_v1');
@@ -639,9 +769,24 @@ export const TeacherDashboard: React.FC = () => {
     maxScore: 100,
   });
 
-  // Fetch real data from Supabase DB on mount
+  // Fetch real data from Supabase DB on mount + Realtime listener for attendance_records
   useEffect(() => {
     fetchSupabaseData();
+
+    const attendanceChannel = supabase
+      .channel('teacher_attendance_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attendance_records' },
+        () => {
+          fetchSupabaseData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(attendanceChannel);
+    };
   }, [user?.id]);
 
   // When selectedClass changes, fetch members & announcements for that class
@@ -665,6 +810,7 @@ export const TeacherDashboard: React.FC = () => {
           profilesMap[p.id] = p;
         });
       }
+      allProfilesCacheRef.current = profilesMap;
 
       const loggedInTeacherProfile = activeTeacherId ? profilesMap[activeTeacherId] : null;
       const loggedInTeacherRealName = resolveTeacherRealName(loggedInTeacherProfile, authUser, null);
@@ -744,7 +890,7 @@ export const TeacherDashboard: React.FC = () => {
               assignmentId: s.assignment_id,
               assignmentTitle: ass?.title || 'Tugas Kelas',
               studentId: s.student_id,
-              studentName: prof ? (prof.full_name || prof.email) : `Siswa (${s.student_id?.slice(0, 8) || ''})`,
+              studentName: resolveStudentDisplayName(null, prof, null, { sid: s.student_id }),
               avatarUrl: prof?.avatar_url,
               fileUrl: s.file_url,
               notes: s.file_name ? `Berkas: ${s.file_name}` : '',
@@ -771,91 +917,116 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
-      // 4.5 Classes from Supabase DB (with real teacher profile resolution & legacy sync)
+      // 4.5 Classes & Enrollments from Supabase DB (with real teacher profile resolution & student-to-class mapping)
+      const classesByIdMap: Record<string, any> = {};
+      const studentEnrolledClassMap: Record<string, any> = {};
       const { data: clsData } = await supabase.from('classes').select('*').order('created_at', { ascending: false });
-      if (clsData && clsData.length > 0) {
-        const { data: enrollData } = await supabase.from('enrollments').select('class_id');
-        const countMap: Record<string, number> = {};
-        if (enrollData) {
-          enrollData.forEach((e: any) => {
+      const { data: enrollData } = await supabase.from('enrollments').select('*');
+
+      const countMap: Record<string, number> = {};
+      if (enrollData) {
+        enrollData.forEach((e: any) => {
+          if (e.class_id) {
             countMap[e.class_id] = (countMap[e.class_id] || 0) + 1;
-          });
-        }
-
-        setClasses(
-          clsData.map((c: any) => {
-            const rawName = c.name || 'Kelas';
-            const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
-            const rawDbCode = (c.code || c.class_code || '').toString().trim().toUpperCase();
-            const extractedCode = (
-              rawDbCode ||
-              (matchCode ? matchCode[1] : '') ||
-              `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
-            )
-              .trim()
-              .toUpperCase();
-            const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
-
-            const classOwnerId = c.teacher_id || activeTeacherId;
-            const ownerProfile = classOwnerId ? profilesMap[classOwnerId] : loggedInTeacherProfile;
-            const isOwnedByCurrentTeacher = !c.teacher_id || c.teacher_id === activeTeacherId;
-
-            const resolvedClassTeacherName = resolveTeacherRealName(
-              ownerProfile,
-              isOwnedByCurrentTeacher ? authUser : null,
-              c.teacher_name
-            );
-
-            // Backfill code and sync real teacher_name / teacher_id on older classes that still say 'Guru EduVerse'
-            const needsCodeUpdate = !c.code || String(c.code).trim().toUpperCase() !== extractedCode;
-            const needsTeacherSync =
-              (!c.teacher_id && !!activeTeacherId) ||
-              (c.teacher_name !== undefined && isPlaceholderTeacherName(c.teacher_name));
-
-            if (needsCodeUpdate || needsTeacherSync) {
-              const updatePayload: Record<string, any> = { code: extractedCode };
-              if (!c.teacher_id && activeTeacherId) {
-                updatePayload.teacher_id = activeTeacherId;
-              }
-              if (c.teacher_name !== undefined && resolvedClassTeacherName) {
-                updatePayload.teacher_name = resolvedClassTeacherName;
-              }
-              (supabase as any)
-                .from('classes')
-                .update(updatePayload)
-                .eq('id', c.id)
-                .then(({ error: syncErr }: any) => {
-                  if (syncErr && updatePayload.teacher_name) {
-                    // Fallback if teacher_name column does not exist in classes schema
-                    delete updatePayload.teacher_name;
-                    (supabase as any).from('classes').update(updatePayload).eq('id', c.id).then(() => {});
-                  }
-                });
-            }
-
-            return {
-              id: c.id,
-              name: cleanName || rawName,
-              code: extractedCode,
-              courseName: c.course_name || 'Mata Pelajaran Umum',
-              teacherId: classOwnerId,
-              teacherName: resolvedClassTeacherName,
-              teacherAvatar: ownerProfile?.avatar_url || user?.avatarUrl,
-              description: c.description || '',
-              jurusan: c.jurusan || 'Semua Jurusan',
-              semester: c.semester || 'Ganjil',
-              academicYear: c.academic_year || '2026/2027',
-              isActive: c.is_active !== false,
-              studentCount: countMap[c.id] || 0,
-            };
-          })
-        );
+          }
+        });
       }
 
-      // 5. Attendance Records with Real Student Profiles (Filtered strictly for Today's Date)
-      const { data: attData } = await supabase.from('attendance_records').select('*').order('scanned_at', { ascending: false });
+      if (clsData && clsData.length > 0) {
+        const mappedClasses = clsData.map((c: any) => {
+          const rawName = c.name || 'Kelas';
+          const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
+          const rawDbCode = (c.code || c.class_code || '').toString().trim().toUpperCase();
+          const extractedCode = (
+            rawDbCode ||
+            (matchCode ? matchCode[1] : '') ||
+            `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
+          )
+            .trim()
+            .toUpperCase();
+          const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
+
+          const classOwnerId = c.teacher_id || activeTeacherId;
+          const ownerProfile = classOwnerId ? profilesMap[classOwnerId] : loggedInTeacherProfile;
+          const isOwnedByCurrentTeacher = !c.teacher_id || c.teacher_id === activeTeacherId;
+
+          const resolvedClassTeacherName = resolveTeacherRealName(
+            ownerProfile,
+            isOwnedByCurrentTeacher ? authUser : null,
+            c.teacher_name
+          );
+
+          // Backfill code and sync real teacher_name / teacher_id on older classes that still say 'Guru EduVerse'
+          const needsCodeUpdate = !c.code || String(c.code).trim().toUpperCase() !== extractedCode;
+          const needsTeacherSync =
+            (!c.teacher_id && !!activeTeacherId) ||
+            (c.teacher_name !== undefined && isPlaceholderTeacherName(c.teacher_name));
+
+          if (needsCodeUpdate || needsTeacherSync) {
+            const updatePayload: Record<string, any> = { code: extractedCode };
+            if (!c.teacher_id && activeTeacherId) {
+              updatePayload.teacher_id = activeTeacherId;
+            }
+            if (c.teacher_name !== undefined && resolvedClassTeacherName) {
+              updatePayload.teacher_name = resolvedClassTeacherName;
+            }
+            (supabase as any)
+              .from('classes')
+              .update(updatePayload)
+              .eq('id', c.id)
+              .then(({ error: syncErr }: any) => {
+                if (syncErr && updatePayload.teacher_name) {
+                  delete updatePayload.teacher_name;
+                  (supabase as any).from('classes').update(updatePayload).eq('id', c.id).then(() => {});
+                }
+              });
+          }
+
+          const clsItem: ClassItem = {
+            id: c.id,
+            name: cleanName || rawName,
+            code: extractedCode,
+            courseName: c.course_name || 'Mata Pelajaran Umum',
+            teacherId: classOwnerId,
+            teacherName: resolvedClassTeacherName,
+            teacherAvatar: ownerProfile?.avatar_url || user?.avatarUrl,
+            description: c.description || '',
+            jurusan: c.jurusan || 'Semua Jurusan',
+            semester: c.semester || 'Ganjil',
+            academicYear: c.academic_year || '2026/2027',
+            isActive: c.is_active !== false,
+            studentCount: countMap[c.id] || 0,
+          };
+
+          classesByIdMap[c.id] = clsItem;
+          return clsItem;
+        });
+
+        setClasses(mappedClasses);
+      }
+
+      if (enrollData) {
+        enrollData.forEach((e: any) => {
+          const sid = e.student_id || e.user_id;
+          const cid = e.class_id;
+          if (sid && cid && classesByIdMap[cid]) {
+            studentEnrolledClassMap[sid] = classesByIdMap[cid];
+          }
+        });
+      }
+      studentEnrolledClassCacheRef.current = studentEnrolledClassMap;
+
+      // 5. Attendance Records with Full Student Name & Major/Class Resolution (Filtered strictly for Today's Date)
+      const { data: attData } = await supabase
+        .from('attendance_records')
+        .select('*')
+        .order('scanned_at', { ascending: false });
+
       if (attData && attData.length > 0) {
-        const missingIds = attData.map((a: any) => a.student_id).filter((id: string) => id && !profilesMap[id]);
+        const missingIds = attData
+          .map((a: any) => a.student_id)
+          .filter((id: string) => id && id.length >= 32 && !profilesMap[id]);
+
         if (missingIds.length > 0) {
           const { data: addProfiles } = await supabase.from('profiles').select('*').in('id', missingIds);
           if (addProfiles) {
@@ -864,7 +1035,9 @@ export const TeacherDashboard: React.FC = () => {
             });
           }
         }
+        allProfilesCacheRef.current = profilesMap;
 
+        const allProfilesList = Object.values(profilesMap);
         const todayStr = getLocalDateYYYYMMDD(new Date());
         let savedResetMap: Record<string, number> = {};
         try {
@@ -876,11 +1049,72 @@ export const TeacherDashboard: React.FC = () => {
 
         const mappedTodayRecords: AttendanceRecord[] = attData
           .map((a: any) => {
-            const prof = profilesMap[a.student_id];
-            let studentName = prof?.full_name || prof?.email;
-            if (!studentName || studentName.startsWith('Siswa (')) {
-              studentName = prof?.full_name || prof?.email || (a.qr_code && !a.qr_code.startsWith('{') ? a.qr_code : 'Siswa');
+            let qrParsed: Record<string, any> | null = null;
+            if (a.qr_code && typeof a.qr_code === 'string' && a.qr_code.trim().startsWith('{')) {
+              try {
+                qrParsed = JSON.parse(a.qr_code);
+              } catch {
+                qrParsed = null;
+              }
             }
+
+            const rawStudentId = String(a.student_id || qrParsed?.sid || qrParsed?.student_id || '').trim();
+            const shortIdPrefix = rawStudentId.replace(/^EDU-SISWA-/i, '').trim().toLowerCase();
+
+            // Lookup profile by exact ID, or 8-char UUID prefix, or qr_code
+            let prof = rawStudentId ? profilesMap[rawStudentId] : undefined;
+            if (!prof && shortIdPrefix.length >= 6) {
+              prof = allProfilesList.find(
+                (p: any) =>
+                  String(p.id || '').toLowerCase().startsWith(shortIdPrefix) ||
+                  (a.qr_code && String(p.qr_code || '').toLowerCase() === String(a.qr_code).toLowerCase()) ||
+                  (qrParsed?.email && String(p.email || '').toLowerCase() === String(qrParsed.email).toLowerCase())
+              );
+            }
+
+            // Lookup in enrolledStudents state
+            const enrolledSt = enrolledStudents.find(
+              (st) =>
+                st.id === rawStudentId ||
+                (shortIdPrefix.length >= 6 && st.id.toLowerCase().startsWith(shortIdPrefix)) ||
+                (prof?.id && st.id === prof.id)
+            );
+
+            // Lookup class object from attendance row class_id, QR classId, or student's enrollment
+            const effectiveStudentId = prof?.id || rawStudentId;
+            const clsObj =
+              (a.class_id && classesByIdMap[a.class_id]) ||
+              (qrParsed?.classId && classesByIdMap[qrParsed.classId]) ||
+              (effectiveStudentId && studentEnrolledClassMap[effectiveStudentId]) ||
+              selectedClass ||
+              Object.values(classesByIdMap)[0] ||
+              null;
+
+            const studentName = resolveStudentDisplayName(a, prof, enrolledSt, qrParsed);
+            const studentMajor = resolveStudentMajorOrClass(a, prof, enrolledSt, clsObj, qrParsed);
+
+            const cleanQrCode =
+              prof?.qr_code ||
+              qrParsed?.code ||
+              (a.qr_code && !String(a.qr_code).trim().startsWith('{') ? a.qr_code : '') ||
+              (effectiveStudentId ? `EDU-SISWA-${String(effectiveStudentId).slice(0, 8)}` : '-');
+
+            // Backfill attendance_records row in Supabase if student_name or student_major is still missing/generic
+            if (
+              a.id &&
+              (isPlaceholderStudentName(a.student_name) || isGenericMajorLabel(a.student_major)) &&
+              !isPlaceholderStudentName(studentName)
+            ) {
+              (supabase as any)
+                .from('attendance_records')
+                .update({
+                  student_name: studentName,
+                  student_major: studentMajor,
+                })
+                .eq('id', a.id)
+                .then(() => {});
+            }
+
             const rawTimeSource = a.scanned_at || a.created_at || new Date().toISOString();
             const parsedDate = new Date(rawTimeSource);
             const recordDateStr = getLocalDateYYYYMMDD(parsedDate);
@@ -888,12 +1122,12 @@ export const TeacherDashboard: React.FC = () => {
 
             return {
               id: a.id,
-              classId: a.class_id,
-              studentId: a.student_id,
+              classId: a.class_id || clsObj?.id,
+              studentId: effectiveStudentId,
               studentName: studentName,
-              avatarUrl: prof?.avatar_url || undefined,
-              jurusan: prof?.jurusan || 'Umum',
-              qrCode: prof?.qr_code || a.student_id || '-',
+              avatarUrl: prof?.avatar_url || enrolledSt?.avatarUrl || undefined,
+              jurusan: studentMajor,
+              qrCode: cleanQrCode,
               status: (a.status === 'pulang' ? 'Sakit' : 'Hadir') as AttendanceRecord['status'],
               scannedAt: formatIndonesianDateTime(parsedDate),
               scannedDate: recordDateStr,
@@ -920,6 +1154,8 @@ export const TeacherDashboard: React.FC = () => {
   // Fetch enrolled students, assignments, submissions & announcements for a specific class
   const fetchClassDetails = async (classId: string) => {
     try {
+      const currentClsObj = classes.find((c) => c.id === classId) || selectedClass;
+
       // 1. Fetch Enrolled Students (support student_id & user_id)
       const { data: enrollData } = await supabase.from('enrollments').select('*').eq('class_id', classId);
       const studentIdsFromEnroll = enrollData ? enrollData.map((e: any) => e.student_id || e.user_id).filter(Boolean) : [];
@@ -953,7 +1189,7 @@ export const TeacherDashboard: React.FC = () => {
       const allStudentIds = Array.from(new Set([...studentIdsFromEnroll, ...studentIdsFromSub]));
 
       // 3. Resolve Student Profiles
-      let profilesMap: Record<string, any> = {};
+      let profilesMap: Record<string, any> = { ...allProfilesCacheRef.current };
       if (allStudentIds.length > 0) {
         const { data: studentProfiles } = await supabase.from('profiles').select('*').in('id', allStudentIds);
         if (studentProfiles) {
@@ -962,20 +1198,46 @@ export const TeacherDashboard: React.FC = () => {
           });
         }
       }
+      allProfilesCacheRef.current = profilesMap;
 
-      // Set Enrolled Students State
+      // Set Enrolled Students State with real student full_name and major/class
       if (enrollData && enrollData.length > 0) {
         const enrollMap = new Map(enrollData.map((e: any) => [e.student_id || e.user_id, e.enrolled_at || e.created_at]));
-        setEnrolledStudents(
-          studentIdsFromEnroll.map((sid: string) => {
-            const p = profilesMap[sid];
+        const mappedEnrolled: EnrolledStudent[] = studentIdsFromEnroll.map((sid: string) => {
+          const p = profilesMap[sid];
+          if (currentClsObj) {
+            studentEnrolledClassCacheRef.current[sid] = currentClsObj;
+          }
+          return {
+            id: sid,
+            fullName: resolveStudentDisplayName(null, p, null, { sid }),
+            email: p?.email || '-',
+            avatarUrl: p?.avatar_url,
+            jurusan: resolveStudentMajorOrClass(null, p, null, currentClsObj, null),
+            joinedAt: new Date(enrollMap.get(sid) || Date.now()).toLocaleDateString('id-ID'),
+          };
+        });
+        setEnrolledStudents(mappedEnrolled);
+
+        // Also enrich any existing attendanceRecords in state with the resolved student names & majors
+        setAttendanceRecords((prev) =>
+          prev.map((rec) => {
+            const matchedSt = mappedEnrolled.find(
+              (st) =>
+                st.id === rec.studentId ||
+                (rec.studentId && st.id.toLowerCase().startsWith(rec.studentId.toLowerCase()))
+            );
+            const prof = rec.studentId ? profilesMap[rec.studentId] : undefined;
+            if (!matchedSt && !prof) return rec;
             return {
-              id: sid,
-              fullName: p?.full_name || p?.email || `Siswa (${sid.slice(0, 8)})`,
-              email: p?.email || '-',
-              avatarUrl: p?.avatar_url,
-              jurusan: p?.jurusan || 'Umum',
-              joinedAt: new Date(enrollMap.get(sid) || Date.now()).toLocaleDateString('id-ID'),
+              ...rec,
+              studentName: isPlaceholderStudentName(rec.studentName)
+                ? resolveStudentDisplayName(null, prof, matchedSt, null)
+                : rec.studentName,
+              jurusan: isGenericMajorLabel(rec.jurusan)
+                ? resolveStudentMajorOrClass(null, prof, matchedSt, currentClsObj, null)
+                : rec.jurusan,
+              avatarUrl: rec.avatarUrl || prof?.avatar_url || matchedSt?.avatarUrl,
             };
           })
         );
@@ -993,7 +1255,7 @@ export const TeacherDashboard: React.FC = () => {
             assignmentId: s.assignment_id,
             assignmentTitle: ass?.title || 'Tugas Kelas',
             studentId: s.student_id,
-            studentName: prof ? (prof.full_name || prof.email) : `Siswa (${s.student_id?.slice(0, 8) || ''})`,
+            studentName: resolveStudentDisplayName(null, prof, null, { sid: s.student_id }),
             avatarUrl: prof?.avatar_url,
             fileUrl: s.file_url,
             notes: s.file_name ? `Berkas: ${s.file_name}` : (s.notes || ''),
@@ -1005,7 +1267,6 @@ export const TeacherDashboard: React.FC = () => {
         });
 
         setSubmissions((prev) => {
-          // Merge newly fetched class submissions with previous state
           const prevMap = new Map(prev.map((item) => [item.id, item]));
           mappedSubmissions.forEach((item) => prevMap.set(item.id, item));
           return Array.from(prevMap.values());
@@ -1115,7 +1376,6 @@ export const TeacherDashboard: React.FC = () => {
                 () => {}
               );
             } catch {
-              // Fallback: enumerate cameras or use front/default camera if environment constraint fails on desktop
               let fallbackCamera: string | { facingMode: string } = { facingMode: 'user' };
               try {
                 const devices = await Html5Qrcode.getCameras();
@@ -1158,7 +1418,7 @@ export const TeacherDashboard: React.FC = () => {
     };
   }, [showScanModal]);
 
-  // Instant Scan Feedback & Background Supabase Insertion
+  // Instant Scan Feedback & Background Supabase Insertion (with Full Student Name & Major/Class)
   const processAutoScan = async (scannedCode: string) => {
     const cleanCode = scannedCode.trim();
     if (!cleanCode || isProcessingScanRef.current) return;
@@ -1195,16 +1455,26 @@ export const TeacherDashboard: React.FC = () => {
       let jsonCodeParam = '';
       let jsonName = '';
       let jsonEmail = '';
-      let jsonJurusan = '';
+      let jsonMajor = '';
+      let jsonClassName = '';
+      let jsonClassId = '';
 
       try {
         const parsed = JSON.parse(cleanCode);
         if (parsed && typeof parsed === 'object') {
-          extractedUUID = parsed.sid || parsed.studentId || parsed.id || '';
+          extractedUUID = parsed.sid || parsed.student_id || parsed.studentId || parsed.id || '';
           jsonCodeParam = parsed.code || '';
-          jsonName = parsed.name || '';
+          jsonName = parsed.student_name || parsed.name || parsed.full_name || '';
           jsonEmail = parsed.email || '';
-          jsonJurusan = parsed.jurusan || '';
+          jsonMajor =
+            parsed.student_major ||
+            parsed.major ||
+            parsed.department ||
+            parsed.jurusan ||
+            parsed.class_name ||
+            '';
+          jsonClassName = parsed.class_name || '';
+          jsonClassId = parsed.classId || parsed.class_id || '';
         }
       } catch {
         // Plain text QR code
@@ -1214,9 +1484,34 @@ export const TeacherDashboard: React.FC = () => {
         extractedUUID = cleanCode.replace(/^EDU-SISWA-/i, '').trim();
       }
 
-      // 3. Instant Visual Feedback (< 50ms) before waiting for network roundtrip!
-      const instantPreviewName = jsonName || (jsonEmail ? jsonEmail.split('@')[0] : '') || '';
-      if (instantPreviewName) {
+      const shortIdPrefix = extractedUUID.replace(/^EDU-SISWA-/i, '').trim().toLowerCase();
+
+      // 3. Fast in-memory lookup from enrolledStudents & allProfilesCacheRef (0ms latency!)
+      const cachedStudent = enrolledStudents.find(
+        (st) =>
+          st.id === extractedUUID ||
+          (shortIdPrefix.length >= 6 && st.id.toLowerCase().startsWith(shortIdPrefix)) ||
+          (jsonEmail && st.email.toLowerCase() === jsonEmail.toLowerCase())
+      );
+
+      let student: any = extractedUUID ? allProfilesCacheRef.current[extractedUUID] : null;
+      if (!student && shortIdPrefix.length >= 6) {
+        student = Object.values(allProfilesCacheRef.current).find(
+          (p: any) =>
+            String(p.id || '').toLowerCase().startsWith(shortIdPrefix) ||
+            String(p.qr_code || '').toLowerCase() === cleanCode.toLowerCase() ||
+            (jsonEmail && String(p.email || '').toLowerCase() === jsonEmail.toLowerCase())
+        );
+      }
+
+      // Instant Visual Feedback (< 50ms) before any network query
+      const instantPreviewName = resolveStudentDisplayName(
+        null,
+        student,
+        cachedStudent,
+        { student_name: jsonName, name: jsonName, email: jsonEmail }
+      );
+      if (!isPlaceholderStudentName(instantPreviewName)) {
         setScanFeedback({
           type: 'success',
           message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${instantPreviewName} • ${formattedDateTime}`,
@@ -1224,40 +1519,65 @@ export const TeacherDashboard: React.FC = () => {
       } else {
         setScanFeedback({
           type: 'success',
-          message: `⚡ QR Terdeteksi! Memverifikasi kehadiran siswa...`,
+          message: `⚡ QR Terdeteksi! Memverifikasi data nama & jurusan siswa...`,
         });
       }
 
-      // 4. Resolve student profile (check local enrolledStudents cache first for 0ms lookup!)
-      let student: any = null;
-      const cachedStudent = enrolledStudents.find(
-        (st) => st.id === extractedUUID || (jsonEmail && st.email === jsonEmail)
-      );
-      if (cachedStudent) {
+      // 4. Query Supabase profiles if not already in memory cache
+      if (!student && extractedUUID) {
+        if (extractedUUID.length >= 32) {
+          const { data } = await supabase.from('profiles').select('*').eq('id', extractedUUID).maybeSingle();
+          if (data) {
+            student = data as any;
+            allProfilesCacheRef.current[(data as any).id] = data;
+          }
+        } else {
+          // Prefix or qr_code lookup
+          const { data: qrProf } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('qr_code', cleanCode)
+            .maybeSingle();
+          if (qrProf) {
+            student = qrProf as any;
+            allProfilesCacheRef.current[(qrProf as any).id] = qrProf;
+          } else {
+            const { data: allProfs } = await supabase.from('profiles').select('*');
+            if (allProfs) {
+              allProfs.forEach((p: any) => {
+                allProfilesCacheRef.current[p.id] = p;
+              });
+              student = allProfs.find(
+                (p: any) =>
+                  String(p.id || '').toLowerCase().startsWith(shortIdPrefix) ||
+                  String(p.qr_code || '').toLowerCase() === cleanCode.toLowerCase()
+              );
+            }
+          }
+        }
+      }
+
+      if (!student && cachedStudent) {
         student = {
           id: cachedStudent.id,
           email: cachedStudent.email,
           full_name: cachedStudent.fullName,
           avatar_url: cachedStudent.avatarUrl,
-          jurusan: cachedStudent.jurusan || jsonJurusan || 'Teknik / Umum',
+          major: cachedStudent.jurusan,
+          jurusan: cachedStudent.jurusan,
           qr_code: jsonCodeParam || `EDU-SISWA-${cachedStudent.id.slice(0, 8)}`,
         };
       }
 
-      if (!student && extractedUUID) {
-        const { data } = await supabase.from('profiles').select('*').eq('id', extractedUUID).maybeSingle();
-        if (data) student = data;
-      }
-
       if (!student && extractedUUID && extractedUUID.length >= 6) {
-        const fallbackName = jsonName || (jsonEmail ? jsonEmail.split('@')[0] : '') || 'Siswa';
         student = {
           id: extractedUUID,
-          email: jsonEmail || `siswa_${extractedUUID.slice(0, 8)}@eduverse.school`,
-          full_name: fallbackName,
+          email: jsonEmail || '',
+          full_name: jsonName || (jsonEmail ? jsonEmail.split('@')[0] : ''),
           role: 'student',
-          jurusan: jsonJurusan || 'Umum',
-          qr_code: jsonCodeParam || cleanCode || `EDU-SISWA-${extractedUUID.slice(0, 8)}`,
+          major: jsonMajor || jsonClassName || '',
+          jurusan: jsonMajor || jsonClassName || '',
+          qr_code: jsonCodeParam || (cleanCode.startsWith('{') ? `EDU-SISWA-${extractedUUID.slice(0, 8)}` : cleanCode),
         };
       }
 
@@ -1270,18 +1590,53 @@ export const TeacherDashboard: React.FC = () => {
         return;
       }
 
-      const resolvedStudentName = student.full_name || jsonName || student.email || 'Siswa';
-      const resolvedQrCode =
-        student.qr_code || jsonCodeParam || (cleanCode.startsWith('{') ? `EDU-SISWA-${String(student.id).slice(0, 8)}` : cleanCode);
+      const effectiveStudentId = student.id || cachedStudent?.id || extractedUUID;
+      const effectiveClassId =
+        targetClassId ||
+        jsonClassId ||
+        studentEnrolledClassCacheRef.current[effectiveStudentId]?.id ||
+        classes[0]?.id ||
+        null;
 
-      // 5. Update UI State Immediately
+      const activeClassObj =
+        selectedClass ||
+        (effectiveClassId ? classes.find((c) => c.id === effectiveClassId) : null) ||
+        studentEnrolledClassCacheRef.current[effectiveStudentId] ||
+        classes[0] ||
+        null;
+
+      const qrPayloadMeta = {
+        student_name: jsonName,
+        name: jsonName,
+        email: jsonEmail,
+        student_major: jsonMajor,
+        major: jsonMajor,
+        class_name: jsonClassName,
+        jurusan: jsonMajor,
+        sid: effectiveStudentId,
+      };
+
+      const resolvedStudentName = resolveStudentDisplayName(null, student, cachedStudent, qrPayloadMeta);
+      const resolvedStudentMajor = resolveStudentMajorOrClass(
+        null,
+        student,
+        cachedStudent,
+        activeClassObj,
+        qrPayloadMeta
+      );
+      const resolvedQrCode =
+        student.qr_code ||
+        jsonCodeParam ||
+        (cleanCode.startsWith('{') ? `EDU-SISWA-${String(effectiveStudentId).slice(0, 8)}` : cleanCode);
+
+      // 5. Update UI State Immediately with complete Student Name & Major/Class
       const newRecord: AttendanceRecord = {
         id: `att-${now.getTime()}`,
-        classId: targetClassId || undefined,
-        studentId: student.id,
+        classId: effectiveClassId || undefined,
+        studentId: effectiveStudentId,
         studentName: resolvedStudentName,
-        avatarUrl: student.avatar_url,
-        jurusan: student.jurusan || jsonJurusan || 'Teknik / Umum',
+        avatarUrl: student.avatar_url || cachedStudent?.avatarUrl,
+        jurusan: resolvedStudentMajor,
         qrCode: resolvedQrCode,
         status: attendanceMode === 'pulang' ? 'Sakit' : 'Hadir',
         scannedAt: formattedDateTime,
@@ -1294,33 +1649,80 @@ export const TeacherDashboard: React.FC = () => {
         ...prev.filter(
           (r) =>
             r.scannedDate === todayDateStr &&
-            !(r.qrCode === newRecord.qrCode && (r.classId || '') === (newRecord.classId || ''))
+            !(
+              (r.studentId === newRecord.studentId || r.qrCode === newRecord.qrCode) &&
+              (r.classId || '') === (newRecord.classId || '')
+            )
         ),
       ]);
 
       setScanFeedback({
         type: 'success',
-        message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${resolvedStudentName} • ${formattedDateTime}`,
+        message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${resolvedStudentName} (${resolvedStudentMajor}) • ${formattedDateTime}`,
       });
       setTimeout(() => setScanFeedback(null), 3500);
 
-      // 6. Save to Supabase in the background (non-blocking for UI responsiveness)
-      (supabase as any)
-        .from('attendance_records')
-        .insert({
-          student_id: student.id,
-          profile_id: student.id,
-          class_id: targetClassId,
-          qr_code: resolvedQrCode,
-          attendance_type: 'qr',
-          session: attendanceMode,
-          session_id: `${attendanceMode}_${todayDateStr}`,
-          status: attendanceMode === 'pulang' ? 'pulang' : 'hadir',
-          scanned_at: nowIso,
-        })
-        .then(({ error: dbErr }: any) => {
-          if (dbErr) console.warn('Attendance DB insert notice:', dbErr.message);
-        });
+      // 6. Save to Supabase attendance_records in the background (including student_name & student_major)
+      (async () => {
+        try {
+          // Also sync student profile in public.profiles if name or major was missing
+          if (effectiveStudentId && String(effectiveStudentId).length >= 32) {
+            (supabase as any)
+              .from('profiles')
+              .update({
+                full_name: resolvedStudentName,
+                major: resolvedStudentMajor,
+                class_name: activeClassObj?.name || resolvedStudentMajor,
+                qr_code: resolvedQrCode,
+              })
+              .eq('id', effectiveStudentId)
+              .then(() => {});
+          }
+
+          const statusVal = attendanceMode === 'pulang' ? 'pulang' : 'hadir';
+
+          // Strategy 1: Standard attendance_records payload with student_name & student_major
+          const { error: err1 } = await (supabase as any).from('attendance_records').insert({
+            student_id: effectiveStudentId,
+            class_id: effectiveClassId,
+            student_name: resolvedStudentName,
+            student_major: resolvedStudentMajor,
+            qr_code: resolvedQrCode,
+            status: statusVal,
+            scanned_at: nowIso,
+          });
+
+          if (err1) {
+            // Strategy 2: Extended payload with session / profile_id columns + student_name & student_major
+            const { error: err2 } = await (supabase as any).from('attendance_records').insert({
+              student_id: effectiveStudentId,
+              profile_id: effectiveStudentId,
+              class_id: effectiveClassId,
+              student_name: resolvedStudentName,
+              student_major: resolvedStudentMajor,
+              qr_code: resolvedQrCode,
+              attendance_type: 'qr',
+              session: attendanceMode,
+              session_id: `${attendanceMode}_${todayDateStr}`,
+              status: statusVal,
+              scanned_at: nowIso,
+            });
+
+            if (err2) {
+              // Strategy 3: Fallback if student_name / student_major columns are not added yet
+              await (supabase as any).from('attendance_records').insert({
+                student_id: effectiveStudentId,
+                class_id: effectiveClassId,
+                qr_code: resolvedQrCode,
+                status: statusVal,
+                scanned_at: nowIso,
+              });
+            }
+          }
+        } catch (bgErr: any) {
+          console.warn('Attendance DB background save notice:', bgErr?.message);
+        }
+      })();
     } catch (err: any) {
       setScanFeedback({
         type: 'error',
@@ -2153,6 +2555,48 @@ export const TeacherDashboard: React.FC = () => {
     setTimeout(() => setAttendanceNotice(null), 5000);
   };
 
+  // Dynamically ensure every attendance record shows the latest resolved Student Name and Major / Class
+  const getResolvedAttendanceDisplay = (r: AttendanceRecord) => {
+    const matchedEnrolled = enrolledStudents.find(
+      (st) => st.id === r.studentId || (r.studentId && st.id.toLowerCase().startsWith(r.studentId.toLowerCase()))
+    );
+    const cachedProf =
+      (r.studentId ? allProfilesCacheRef.current[r.studentId] : undefined) ||
+      Object.values(allProfilesCacheRef.current).find(
+        (p: any) => r.studentId && String(p.id || '').toLowerCase().startsWith(r.studentId.toLowerCase())
+      );
+    const enrolledCls =
+      (r.studentId ? studentEnrolledClassCacheRef.current[r.studentId] : undefined) ||
+      (matchedEnrolled ? studentEnrolledClassCacheRef.current[matchedEnrolled.id] : undefined) ||
+      (r.classId ? classes.find((c) => c.id === r.classId) : undefined) ||
+      selectedClass ||
+      classes[0];
+
+    const attRowObj = {
+      student_id: r.studentId,
+      student_name: r.studentName,
+      student_major: r.jurusan,
+      jurusan: r.jurusan,
+    };
+
+    const studentName = resolveStudentDisplayName(
+      attRowObj,
+      cachedProf || null,
+      matchedEnrolled || null,
+      null
+    );
+
+    const jurusan = resolveStudentMajorOrClass(
+      attRowObj,
+      cachedProf || null,
+      matchedEnrolled || null,
+      enrolledCls || null,
+      null
+    );
+
+    return { studentName, jurusan };
+  };
+
   // Export Attendance to Excel (CSV) + Auto-Reset Session
   const handleExportExcel = () => {
     const recordsToExport = selectedClass
@@ -2168,13 +2612,16 @@ export const TeacherDashboard: React.FC = () => {
       `"Kelas / Mata Pelajaran","${classLabel}"`,
       `"Waktu Unduh Rekap","${exportTimestamp}"`,
       `""`,
-      `"No","Nama Siswa","Tanggal & Jam Hadir","Jurusan","Kode QR","Status Kehadiran"`,
+      `"No","Nama Siswa","Tanggal & Jam Hadir","Jurusan / Kelas","Kode QR","Status Kehadiran"`,
     ];
 
-    const dataRows = recordsToExport.map(
-      (r, idx) =>
-        `"${idx + 1}","${r.studentName}","${r.scannedAt}","${r.jurusan}","${r.qrCode}","${r.status}"`
-    );
+    const dataRows = recordsToExport.map((r, idx) => {
+      const resolved = getResolvedAttendanceDisplay(r);
+      const safeName = resolved.studentName.replace(/"/g, '""');
+      const safeJurusan = resolved.jurusan.replace(/"/g, '""');
+      const safeQr = (r.qrCode || '').replace(/"/g, '""');
+      return `"${idx + 1}","${safeName}","${r.scannedAt}","${safeJurusan}","${safeQr}","${r.status}"`;
+    });
 
     const csvContent =
       'data:text/csv;charset=utf-8,\uFEFF' + headerMeta.concat(dataRows).join('\n');
@@ -2229,25 +2676,26 @@ export const TeacherDashboard: React.FC = () => {
                   <th>No</th>
                   <th>Nama Siswa</th>
                   <th>Tanggal &amp; Jam Hadir</th>
-                  <th>Jurusan</th>
+                  <th>Jurusan / Kelas</th>
                   <th>Kode QR ID</th>
                   <th>Status Kehadiran</th>
                 </tr>
               </thead>
               <tbody>
                 ${recordsToExport
-                  .map(
-                    (r, index) => `
+                  .map((r, index) => {
+                    const resolved = getResolvedAttendanceDisplay(r);
+                    return `
                   <tr>
                     <td>${index + 1}</td>
-                    <td><strong>${r.studentName}</strong></td>
+                    <td><strong>${resolved.studentName}</strong></td>
                     <td>${r.scannedAt}</td>
-                    <td>${r.jurusan}</td>
+                    <td>${resolved.jurusan}</td>
                     <td>${r.qrCode}</td>
                     <td>${r.status}</td>
                   </tr>
-                `
-                  )
+                `;
+                  })
                   .join('')}
               </tbody>
             </table>
@@ -2631,7 +3079,7 @@ export const TeacherDashboard: React.FC = () => {
                     <tr>
                       <th className="p-2.5">Nama Siswa</th>
                       <th className="p-2.5">Tanggal &amp; Jam Hadir</th>
-                      <th className="p-2.5">Jurusan</th>
+                      <th className="p-2.5">Jurusan / Kelas</th>
                       <th className="p-2.5">Kode QR</th>
                       <th className="p-2.5">Status</th>
                     </tr>
@@ -2644,27 +3092,34 @@ export const TeacherDashboard: React.FC = () => {
                         </td>
                       </tr>
                     ) : (
-                      classAttendanceRecords.map((r) => (
-                        <tr key={r.id} className="hover:bg-muted/30">
-                          <td className="p-2.5 flex items-center gap-2 font-bold text-foreground">
-                            <UserAvatar src={r.avatarUrl} name={r.studentName} size="sm" />
-                            <span>{r.studentName}</span>
-                          </td>
-                          <td className="p-2.5 font-semibold text-blue-600 dark:text-blue-400">
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                              <Clock className="w-3.5 h-3.5 shrink-0" />
-                              {r.scannedAt}
-                            </span>
-                          </td>
-                          <td className="p-2.5 text-muted-foreground">{r.jurusan}</td>
-                          <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
-                          <td className="p-2.5">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
-                              {r.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
+                      classAttendanceRecords.map((r) => {
+                        const resolved = getResolvedAttendanceDisplay(r);
+                        return (
+                          <tr key={r.id} className="hover:bg-muted/30">
+                            <td className="p-2.5 flex items-center gap-2 font-bold text-foreground">
+                              <UserAvatar src={r.avatarUrl} name={resolved.studentName} size="sm" />
+                              <span>{resolved.studentName}</span>
+                            </td>
+                            <td className="p-2.5 font-semibold text-blue-600 dark:text-blue-400">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                                <Clock className="w-3.5 h-3.5 shrink-0" />
+                                {r.scannedAt}
+                              </span>
+                            </td>
+                            <td className="p-2.5 font-semibold text-indigo-600 dark:text-indigo-400">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-indigo-500/10 border border-indigo-500/20 text-[11px]">
+                                {resolved.jurusan}
+                              </span>
+                            </td>
+                            <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
+                            <td className="p-2.5">
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
+                                {r.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -2716,7 +3171,14 @@ export const TeacherDashboard: React.FC = () => {
                         <div>
                           <h4 className="font-bold text-sm text-foreground">{st.fullName}</h4>
                           <p className="text-xs text-muted-foreground">{st.email}</p>
-                          <span className="text-[10px] text-muted-foreground">Bergabung: {st.joinedAt}</span>
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            {st.jurusan && (
+                              <span className="px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 text-[10px] font-semibold">
+                                {st.jurusan}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-muted-foreground">Bergabung: {st.joinedAt}</span>
+                          </div>
                         </div>
                       </div>
 
@@ -3266,7 +3728,7 @@ export const TeacherDashboard: React.FC = () => {
                   <tr>
                     <th className="p-2.5">Nama Siswa</th>
                     <th className="p-2.5">Tanggal &amp; Jam Hadir</th>
-                    <th className="p-2.5">Jurusan</th>
+                    <th className="p-2.5">Jurusan / Kelas</th>
                     <th className="p-2.5">Kode QR</th>
                     <th className="p-2.5">Status</th>
                   </tr>
@@ -3279,27 +3741,34 @@ export const TeacherDashboard: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    todayActiveAttendanceRecords.map((r) => (
-                      <tr key={r.id} className="hover:bg-muted/30">
-                        <td className="p-2.5 flex items-center gap-2 font-bold text-foreground">
-                          <UserAvatar src={r.avatarUrl} name={r.studentName} size="sm" />
-                          <span>{r.studentName}</span>
-                        </td>
-                        <td className="p-2.5 font-semibold text-blue-600 dark:text-blue-400">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                            <Clock className="w-3.5 h-3.5 shrink-0" />
-                            {r.scannedAt}
-                          </span>
-                        </td>
-                        <td className="p-2.5 text-muted-foreground">{r.jurusan}</td>
-                        <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
-                        <td className="p-2.5">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
-                            {r.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
+                    todayActiveAttendanceRecords.map((r) => {
+                      const resolved = getResolvedAttendanceDisplay(r);
+                      return (
+                        <tr key={r.id} className="hover:bg-muted/30">
+                          <td className="p-2.5 flex items-center gap-2 font-bold text-foreground">
+                            <UserAvatar src={r.avatarUrl} name={resolved.studentName} size="sm" />
+                            <span>{resolved.studentName}</span>
+                          </td>
+                          <td className="p-2.5 font-semibold text-blue-600 dark:text-blue-400">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                              <Clock className="w-3.5 h-3.5 shrink-0" />
+                              {r.scannedAt}
+                            </span>
+                          </td>
+                          <td className="p-2.5 font-semibold text-indigo-600 dark:text-indigo-400">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-indigo-500/10 border border-indigo-500/20 text-[11px]">
+                              {resolved.jurusan}
+                            </span>
+                          </td>
+                          <td className="p-2.5 font-mono text-amber-600">{r.qrCode}</td>
+                          <td className="p-2.5">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
+                              {r.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

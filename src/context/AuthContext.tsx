@@ -67,7 +67,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isPlaceholderName = (val?: string | null) => {
         if (!val || typeof val !== 'string') return true;
         const clean = val.trim().toLowerCase();
-        return !clean || clean === 'guru eduverse' || clean === 'pengguna eduverse' || clean === 'guru pengampu';
+        return (
+          !clean ||
+          clean === 'guru eduverse' ||
+          clean === 'pengguna eduverse' ||
+          clean === 'guru pengampu' ||
+          clean === 'siswa' ||
+          clean === 'anonim' ||
+          clean === 'akun pengguna' ||
+          clean === '-'
+        );
       };
 
       const emailPrefix = authUser.email ? String(authUser.email).split('@')[0] : '';
@@ -86,7 +95,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           authUser.email ||
           'Akun Pengguna';
 
-        // Sync real name to public.profiles if DB still has empty or placeholder 'Guru EduVerse'
+        const resolvedMajor =
+          profileData.major ||
+          profileData.department ||
+          profileData.class_name ||
+          profileData.jurusan ||
+          authUser.user_metadata?.major ||
+          authUser.user_metadata?.department ||
+          authUser.user_metadata?.class_name ||
+          authUser.user_metadata?.jurusan;
+
+        // Sync real name to public.profiles if DB still has empty or placeholder name
         if (isPlaceholderName(profileData.full_name) && resolvedFullName) {
           (supabase as any)
             .from('profiles')
@@ -101,7 +120,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fullName: resolvedFullName,
           avatarUrl: profileData.avatar_url || undefined,
           role: mappedRole,
-          jurusan: profileData.jurusan || authUser.user_metadata?.jurusan,
+          jurusan: resolvedMajor,
           qrCode: profileData.qr_code || `EDU-SISWA-${authUser.id.slice(0, 8)}`,
           createdAt: profileData.created_at || new Date().toISOString(),
           updatedAt: profileData.updated_at || new Date().toISOString(),
@@ -119,6 +138,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           authUser.email ||
           'Akun Pengguna';
 
+        const resolvedMajor =
+          authUser.user_metadata?.major ||
+          authUser.user_metadata?.department ||
+          authUser.user_metadata?.class_name ||
+          authUser.user_metadata?.jurusan;
+
         // Backfill missing profile row so StudentDashboard & TeacherDashboard joins find the real name
         (supabase as any)
           .from('profiles')
@@ -135,7 +160,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: authUser.email || '',
           fullName: resolvedFullName,
           role: mappedRole,
-          jurusan: authUser.user_metadata?.jurusan,
+          jurusan: resolvedMajor,
           qrCode: `EDU-SISWA-${authUser.id.slice(0, 8)}`,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
