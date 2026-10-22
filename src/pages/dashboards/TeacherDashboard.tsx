@@ -507,11 +507,40 @@ export const TeacherDashboard: React.FC = () => {
   const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
   const [selectedSubmission, setSelectedSubmission] = useState<SubmissionItem | null>(null);
+  const [copiedClassCode, setCopiedClassCode] = useState<string | null>(null);
+
+  const generateUniqueClassCode = (): string => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let randomPart = '';
+    for (let i = 0; i < 4; i++) {
+      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return `EV${randomPart}`.trim().toUpperCase();
+  };
+
+  const handleCopyClassCode = (code: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const cleanCode = (code || '').trim().toUpperCase();
+    if (!cleanCode) return;
+    navigator.clipboard.writeText(cleanCode);
+    setCopiedClassCode(cleanCode);
+    setTimeout(() => {
+      setCopiedClassCode((prev) => (prev === cleanCode ? null : prev));
+    }, 2500);
+  };
 
   // Form Inputs
   const [newCourse, setNewCourse] = useState({ code: '', name: '' });
-  const [newClass, setNewClass] = useState<{ name: string; courseName: string; description?: string; jurusan?: string; semester?: string }>({
+  const [newClass, setNewClass] = useState<{
+    name: string;
+    code?: string;
+    courseName: string;
+    description?: string;
+    jurusan?: string;
+    semester?: string;
+  }>({
     name: '',
+    code: '',
     courseName: '',
     description: '',
     jurusan: 'Semua Jurusan',
@@ -664,9 +693,25 @@ export const TeacherDashboard: React.FC = () => {
         setClasses(
           clsData.map((c: any) => {
             const rawName = c.name || 'Kelas';
-            const matchCode = rawName.match(/\[(EDU[A-Z0-9]+)\]/i);
-            const extractedCode = c.code || c.class_code || (matchCode ? matchCode[1] : null) || `EDU${c.id.slice(0, 5).toUpperCase()}`;
-            const cleanName = rawName.replace(/\s*\[EDU[A-Z0-9]+\]/i, '').trim();
+            const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
+            const rawDbCode = (c.code || c.class_code || '').toString().trim().toUpperCase();
+            const extractedCode = (
+              rawDbCode ||
+              (matchCode ? matchCode[1] : '') ||
+              `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
+            )
+              .trim()
+              .toUpperCase();
+            const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
+
+            // Backfill code column in Supabase if missing or not normalized
+            if (!c.code || String(c.code).trim().toUpperCase() !== extractedCode) {
+              (supabase as any)
+                .from('classes')
+                .update({ code: extractedCode })
+                .eq('id', c.id)
+                .then(() => {});
+            }
 
             return {
               id: c.id,
@@ -1118,11 +1163,18 @@ export const TeacherDashboard: React.FC = () => {
 
   const handleCreateClass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newClass.name) return;
+    if (!newClass.name.trim()) return;
 
     try {
-      const generatedCode = 'EDU' + Math.random().toString(36).substring(2, 7).toUpperCase();
-      console.log('📌 [Teacher Class Create Request]:', { name: newClass.name, generatedCode, teacher_id: user?.id });
+      const cleanClassName = newClass.name.trim();
+      const rawCodeInput = (newClass.code || '').trim().toUpperCase().replace(/\s+/g, '');
+      const generatedCode = (rawCodeInput || generateUniqueClassCode()).trim().toUpperCase();
+
+      console.log('📌 [Teacher Class Create Request]:', {
+        name: cleanClassName,
+        code: generatedCode,
+        teacher_id: user?.id,
+      });
 
       // Fetch active school_id and course_id from DB if available
       let schoolId = '2fb69c98-48c0-4473-80b7-79bbf7ba5fc2';
@@ -1138,51 +1190,100 @@ export const TeacherDashboard: React.FC = () => {
         if (crsData && crsData.length > 0) courseId = crsData[0].id;
       } catch (eCrs) {}
 
-      // Primary Insert Strategy: Full payload including valid school_id & course_id
-      let { data, error } = await (supabase as any).from('classes').insert({
-        name: `${newClass.name} [${generatedCode}]`,
-        code: generatedCode,
-        class_code: generatedCode,
-        teacher_id: user?.id,
-        school_id: schoolId,
-        course_id: courseId,
-        course_name: newClass.courseName || 'Mata Pelajaran Umum',
-        description: newClass.description || '',
-        jurusan: newClass.jurusan || 'Semua Jurusan',
-        semester: newClass.semester || 'Ganjil',
-        academic_year: '2026/2027',
-        is_active: true,
-      }).select();
-
-      // Fallback Strategy: Retry without school_id/course_id if columns drop constraint
-      if (error && (error.message.includes('school_id') || error.message.includes('course_id') || error.message.includes('column'))) {
-        console.warn('⚠️ Retrying class insert with secondary payload:', error.message);
-        const retryRes = await (supabase as any).from('classes').insert({
-          name: `${newClass.name} [${generatedCode}]`,
+      // Strategy 1: Standard classes payload with code in UPPERCASE
+      let { data, error } = await (supabase as any)
+        .from('classes')
+        .insert({
+          name: cleanClassName,
           code: generatedCode,
-          class_code: generatedCode,
           teacher_id: user?.id,
+          school_id: schoolId,
+          course_id: courseId,
+          course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
+          description: (newClass.description || '').trim(),
+          jurusan: newClass.jurusan || 'Semua Jurusan',
+          semester: newClass.semester || 'Ganjil',
           academic_year: '2026/2027',
-        }).select();
-        data = retryRes.data;
-        error = retryRes.error;
+          is_active: true,
+        })
+        .select();
+
+      // Strategy 2: Retry without school_id/course_id if FK/column constraints differ
+      if (error) {
+        console.warn('⚠️ Retrying class insert (Strategy 2 - without school_id/course_id):', error.message);
+        const retry2 = await (supabase as any)
+          .from('classes')
+          .insert({
+            name: cleanClassName,
+            code: generatedCode,
+            teacher_id: user?.id,
+            course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
+            description: (newClass.description || '').trim(),
+            jurusan: newClass.jurusan || 'Semua Jurusan',
+            semester: newClass.semester || 'Ganjil',
+            academic_year: '2026/2027',
+            is_active: true,
+          })
+          .select();
+        data = retry2.data;
+        error = retry2.error;
+      }
+
+      // Strategy 3: Minimal core columns (name, code, teacher_id, academic_year)
+      if (error) {
+        console.warn('⚠️ Retrying class insert (Strategy 3 - core columns):', error.message);
+        const retry3 = await (supabase as any)
+          .from('classes')
+          .insert({
+            name: cleanClassName,
+            code: generatedCode,
+            teacher_id: user?.id,
+            academic_year: '2026/2027',
+          })
+          .select();
+        data = retry3.data;
+        error = retry3.error;
+      }
+
+      // Strategy 4: Fallback if table uses class_code instead of code
+      if (error) {
+        console.warn('⚠️ Retrying class insert (Strategy 4 - class_code fallback):', error.message);
+        const retry4 = await (supabase as any)
+          .from('classes')
+          .insert({
+            name: `${cleanClassName} [${generatedCode}]`,
+            class_code: generatedCode,
+            teacher_id: user?.id,
+          })
+          .select();
+        data = retry4.data;
+        error = retry4.error;
       }
 
       if (error || !data || data.length === 0) {
         console.error('❌ [Teacher Class Create Database Error]:', error);
-        alert(`Gagal menyimpan kelas ke database Supabase!\n\nPenyebab Error: ${error?.message || 'Akses ditolak atau kendala skema database.'}`);
+        alert(
+          `Gagal menyimpan kelas ke database Supabase!\n\nPenyebab Error: ${
+            error?.message || 'Akses ditolak atau kendala skema database.'
+          }`
+        );
         return;
       }
 
-      const createdId = data[0].id;
-      console.log('🎉 [Teacher Class Successfully Saved to Supabase DB]:', data[0]);
+      const createdRow = data[0];
+      const createdId = createdRow.id;
+      const savedCode = String(createdRow.code || createdRow.class_code || generatedCode)
+        .trim()
+        .toUpperCase();
+
+      console.log('🎉 [Teacher Class Successfully Saved to Supabase DB]:', createdRow);
 
       const obj: ClassItem = {
         id: createdId,
-        name: newClass.name,
-        code: generatedCode,
-        courseName: newClass.courseName || 'Mata Pelajaran Umum',
-        description: newClass.description || '',
+        name: cleanClassName,
+        code: savedCode,
+        courseName: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
+        description: (newClass.description || '').trim(),
         jurusan: newClass.jurusan || 'Semua Jurusan',
         semester: newClass.semester || 'Ganjil',
         academicYear: '2026/2027',
@@ -1190,11 +1291,22 @@ export const TeacherDashboard: React.FC = () => {
         studentCount: 0,
       };
 
-      setClasses([obj, ...classes]);
-      setNewClass({ name: '', courseName: '', description: '', jurusan: 'Semua Jurusan', semester: 'Ganjil' });
+      setClasses((prev) => [obj, ...prev]);
+      setNewClass({
+        name: '',
+        code: '',
+        courseName: '',
+        description: '',
+        jurusan: 'Semua Jurusan',
+        semester: 'Ganjil',
+      });
       setShowClassModal(false);
 
-      alert(`✅ Kelas "${newClass.name}" berhasil dibuat dan tersimpan di Database Supabase!\n\nKode Kelas Unik: ${generatedCode}\n\nBagikan kode ini kepada siswa agar dapat bergabung.`);
+      alert(
+        `✅ Kelas "${cleanClassName}" berhasil dibuat dan tersimpan di Database Supabase!\n\n` +
+          `Kode Kelas Unik: ${savedCode}\n\n` +
+          `Bagikan Kode Kelas ini kepada siswa agar dapat langsung bergabung.`
+      );
     } catch (err: any) {
       console.error('❌ [Teacher Class Create Exception]:', err);
       alert(`Gagal membuat kelas: ${err.message}`);
@@ -1905,17 +2017,23 @@ export const TeacherDashboard: React.FC = () => {
               <ArrowLeft className="w-4 h-4" /> Kembali ke Daftar Kelas Utama
             </button>
             <div className="flex items-center gap-2">
-              <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+              <span className="px-3 py-1.5 rounded-xl text-xs font-mono font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
                 Kode Kelas: {selectedClass.code}
               </span>
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(selectedClass.code);
-                  alert(`✅ Kode Kelas "${selectedClass.code}" berhasil disalin ke clipboard! Bagikan ke siswa Anda.`);
-                }}
-                className="px-3 py-1.5 rounded-xl bg-blue-600 text-white font-bold text-xs shadow hover:bg-blue-700 transition-all cursor-pointer"
+                type="button"
+                onClick={(e) => handleCopyClassCode(selectedClass.code, e)}
+                className="px-3 py-1.5 rounded-xl bg-blue-600 text-white font-bold text-xs shadow hover:bg-blue-700 transition-all cursor-pointer inline-flex items-center gap-1.5"
               >
-                Salin Kode 📋
+                {copiedClassCode === selectedClass.code ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" /> Tersalin!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" /> Salin Kode
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1924,13 +2042,32 @@ export const TeacherDashboard: React.FC = () => {
           <div className="p-6 rounded-3xl bg-gradient-to-r from-teal-900 via-slate-900 to-indigo-950 text-white shadow-xl space-y-3 border border-teal-500/20">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-500/20 text-teal-300 border border-teal-400/30">
                     {selectedClass.courseName}
                   </span>
                   <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                     {selectedClass.isActive ? 'Kelas Aktif' : 'Kelas Ditutup'}
                   </span>
+                  <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-bold bg-blue-500/20 text-blue-200 border border-blue-400/30">
+                    Kode Kelas: {selectedClass.code}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => handleCopyClassCode(selectedClass.code, e)}
+                    className="px-2.5 py-0.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition-all shadow"
+                    title="Salin Kode Kelas"
+                  >
+                    {copiedClassCode === selectedClass.code ? (
+                      <>
+                        <Check className="w-3 h-3" /> Tersalin
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" /> Salin Kode
+                      </>
+                    )}
+                  </button>
                 </div>
                 <h1 className="text-2xl sm:text-3xl font-display font-extrabold text-white mt-1">{selectedClass.name}</h1>
                 <p className="text-xs text-slate-300">
@@ -2396,13 +2533,31 @@ export const TeacherDashboard: React.FC = () => {
                       className="p-6 rounded-3xl bg-card border border-border shadow-sm hover:shadow-xl transition-all space-y-4 flex flex-col justify-between group"
                     >
                       <div className="space-y-3">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-500/10 text-teal-600 border border-teal-500/20">
                             {cls.courseName}
                           </span>
-                          <span className="text-[11px] font-mono font-bold text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
-                            {cls.code}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-mono font-bold text-blue-600 bg-blue-500/10 px-2.5 py-0.5 rounded border border-blue-500/20">
+                              Kode: {cls.code}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => handleCopyClassCode(cls.code, e)}
+                              className="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer transition-all shadow-sm"
+                              title={`Salin Kode Kelas ${cls.code}`}
+                            >
+                              {copiedClassCode === cls.code ? (
+                                <>
+                                  <Check className="w-3 h-3" /> Tersalin
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" /> Salin Kode
+                                </>
+                              )}
+                            </button>
+                          </div>
                         </div>
 
                         <div>
@@ -2715,11 +2870,31 @@ export const TeacherDashboard: React.FC = () => {
                 className="p-5 rounded-2xl bg-card border border-border shadow-sm flex flex-col justify-between gap-4"
               >
                 <div>
-                  <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center justify-between gap-2 mb-1">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-indigo-500/10 text-indigo-600">
                       {cls.courseName}
                     </span>
-                    <span className="text-[11px] font-mono font-bold text-blue-600">{cls.code}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-mono font-bold text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                        Kode: {cls.code}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => handleCopyClassCode(cls.code, e)}
+                        className="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer transition-all shadow-sm"
+                        title={`Salin Kode Kelas ${cls.code}`}
+                      >
+                        {copiedClassCode === cls.code ? (
+                          <>
+                            <Check className="w-3 h-3" /> Tersalin
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" /> Salin Kode
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <h4 className="font-bold text-base text-foreground">{cls.name}</h4>
                   <p className="text-xs text-muted-foreground mt-1">
@@ -2948,13 +3123,31 @@ export const TeacherDashboard: React.FC = () => {
                     className="p-6 rounded-3xl bg-card border border-border shadow-sm hover:shadow-xl transition-all space-y-4 flex flex-col justify-between group"
                   >
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-500/10 text-teal-600 border border-teal-500/20">
                           {cls.courseName}
                         </span>
-                        <span className="text-[11px] font-mono font-bold text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
-                          {cls.code}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-mono font-bold text-blue-600 bg-blue-500/10 px-2.5 py-0.5 rounded border border-blue-500/20">
+                            Kode: {cls.code}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => handleCopyClassCode(cls.code, e)}
+                            className="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer transition-all shadow-sm"
+                            title={`Salin Kode Kelas ${cls.code}`}
+                          >
+                            {copiedClassCode === cls.code ? (
+                              <>
+                                <Check className="w-3 h-3" /> Tersalin
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" /> Salin Kode
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
 
                       <div>
@@ -3003,12 +3196,12 @@ export const TeacherDashboard: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-base font-bold text-foreground">Buat Kelas Baru & Kode Kelas</h3>
+              <h3 className="text-base font-bold text-foreground">Buat Kelas Baru &amp; Kode Kelas</h3>
               <button onClick={() => setShowClassModal(false)} className="text-muted-foreground hover:text-foreground cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={handleCreateClass} className="space-y-3">
+            <form onSubmit={handleCreateClass} className="space-y-3 text-left">
               <div className="space-y-1">
                 <label className="text-xs font-bold text-foreground">Nama Kelas *</label>
                 <input
@@ -3031,6 +3224,27 @@ export const TeacherDashboard: React.FC = () => {
                   onChange={(e) => setNewClass({ ...newClass, courseName: e.target.value })}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-muted/60 border border-border text-xs focus:outline-none focus:ring-1 focus:ring-teal-500"
                 />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-foreground">Kode Kelas Unik (Otomatis jika dikosongkan)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    maxLength={8}
+                    placeholder="Kosongkan agar di-generate otomatis (Contoh: EV8X2K)"
+                    value={newClass.code || ''}
+                    onChange={(e) => setNewClass({ ...newClass, code: e.target.value.toUpperCase().replace(/\s+/g, '') })}
+                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-muted/60 border border-border text-xs font-mono font-bold uppercase tracking-wider focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setNewClass({ ...newClass, code: generateUniqueClassCode() })}
+                    className="px-3 py-2.5 rounded-xl bg-blue-600/10 hover:bg-blue-600 hover:text-white text-blue-600 border border-blue-500/30 text-xs font-bold cursor-pointer transition-all shrink-0 flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Acak Kode
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -3059,7 +3273,7 @@ export const TeacherDashboard: React.FC = () => {
               </div>
 
               <div className="p-3 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-[11px] text-teal-600 font-medium">
-                💡 Kode Kelas Unik acak 8 karakter akan dibuat secara otomatis saat kelas disimpan.
+                💡 Kode Kelas Unik 6–7 karakter (huruf kapital &amp; angka) otomatis dibuat dan disimpan dalam format UPPERCASE di Supabase.
               </div>
 
               <button type="submit" className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg shadow-teal-600/30 cursor-pointer transition-all">

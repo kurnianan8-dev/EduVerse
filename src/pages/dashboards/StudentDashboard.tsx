@@ -284,30 +284,61 @@ export const StudentDashboard: React.FC = () => {
   const fetchStudentEnrolledClasses = async () => {
     if (!user?.id) return;
     try {
-      // 1. Query enrollments table checking student_id or user_id
-      const { data: enrollData } = await supabase
+      // 1. Query enrollments table by student_id (with safe fallback to class_members / user_id)
+      let enrollRows: any[] = [];
+      const { data: enrollData, error: enrollErr } = await supabase
         .from('enrollments')
-        .select('class_id, student_id, user_id')
-        .or(`student_id.eq.${user.id},user_id.eq.${user.id}`);
+        .select('*')
+        .eq('student_id', user.id);
 
-      let classIds: string[] = [];
-      if (enrollData && enrollData.length > 0) {
-        classIds = Array.from(new Set(enrollData.map((e: any) => e.class_id).filter(Boolean)));
+      if (enrollData && !enrollErr) {
+        enrollRows = enrollData;
+      } else {
+        const { data: altEnroll } = await (supabase as any)
+          .from('enrollments')
+          .select('*')
+          .eq('user_id', user.id);
+        if (altEnroll && altEnroll.length > 0) {
+          enrollRows = altEnroll;
+        }
       }
+
+      // Also check class_members if used alongside enrollments
+      try {
+        const { data: cmData } = await (supabase as any)
+          .from('class_members')
+          .select('class_id, student_id')
+          .eq('student_id', user.id);
+        if (cmData && cmData.length > 0) {
+          enrollRows = [...enrollRows, ...cmData];
+        }
+      } catch {
+        // ignore if class_members table does not exist
+      }
+
+      const classIds: string[] = Array.from(
+        new Set(enrollRows.map((e: any) => e.class_id).filter(Boolean))
+      );
 
       console.log('📌 [StudentDashboard Audit] Current Student User ID:', user.id);
       console.log('📌 [StudentDashboard Audit] Enrolled Class IDs:', classIds);
 
-      // 2. Query classes
-      let query = supabase.from('classes').select('*');
-      if (classIds.length > 0) {
-        query = query.in('id', classIds);
+      if (classIds.length === 0) {
+        setEnrolledClasses([]);
+        setMaterials([]);
+        setAllEnrolledAssignments([]);
+        return;
       }
-      const { data: clsData } = await query;
+
+      // 2. Query classes for the student's enrolled classIds
+      const { data: clsData } = await supabase
+        .from('classes')
+        .select('*')
+        .in('id', classIds);
 
       // 3. Fetch materials, assignments, profiles map for counts
-      const { data: matData } = await supabase.from('materials').select('id, class_id');
-      const { data: assData } = await supabase.from('assignments').select('id, class_id');
+      const { data: matData } = await supabase.from('materials').select('id, class_id').in('class_id', classIds);
+      const { data: assData } = await supabase.from('assignments').select('id, class_id').in('class_id', classIds);
       const { data: attData } = await supabase.from('attendance_records').select('class_id, status').eq('student_id', user.id);
       const { data: teacherProfiles } = await supabase.from('profiles').select('id, full_name, avatar_url');
 
@@ -351,9 +382,16 @@ export const StudentDashboard: React.FC = () => {
             const att = attCountMap[c.id];
             const attPercent = att && att.total > 0 ? Math.round((att.hadir / att.total) * 100) : 100;
             const rawName = c.name || 'Kelas';
-            const matchCode = rawName.match(/\[(EDU[A-Z0-9]+)\]/i);
-            const extractedCode = c.code || c.class_code || (matchCode ? matchCode[1] : null) || 'EDU8XK21';
-            const cleanName = rawName.replace(/\s*\[EDU[A-Z0-9]+\]/i, '').trim();
+            const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
+            const extractedCode = String(
+              c.code ||
+                c.class_code ||
+                (matchCode ? matchCode[1] : null) ||
+                `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
+            )
+              .trim()
+              .toUpperCase();
+            const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
 
             return {
               id: c.id,
@@ -393,12 +431,11 @@ export const StudentDashboard: React.FC = () => {
       }
 
       // 5. Fetch Materials & Assignments for student's enrolled classes
-      let materialsQuery = supabase.from('materials').select('*').order('created_at', { ascending: false });
-      if (classIds.length > 0) {
-        materialsQuery = materialsQuery.in('class_id', classIds);
-      }
-
-      const { data: fullMats, error: matErr } = await materialsQuery;
+      const { data: fullMats, error: matErr } = await supabase
+        .from('materials')
+        .select('*')
+        .in('class_id', classIds)
+        .order('created_at', { ascending: false });
 
       if (fullMats && !matErr) {
         const mappedMats = fullMats.map((m: any) => ({
@@ -412,54 +449,52 @@ export const StudentDashboard: React.FC = () => {
           createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
         }));
         setMaterials(mappedMats);
-        console.log('[STUDENT MATERIALS]', mappedMats);
-        console.log('[STUDENT MATERIALS COUNT]', mappedMats.length);
       }
 
       // 5b. Fetch All Assignments across enrolled classes for Ruang Belajar Siswa summary
-      if (classIds.length > 0) {
-        const { data: fullAssData, error: fullAssErr } = await supabase
-          .from('assignments')
-          .select('*')
-          .in('class_id', classIds)
-          .order('created_at', { ascending: false });
+      const { data: fullAssData, error: fullAssErr } = await supabase
+        .from('assignments')
+        .select('*')
+        .in('class_id', classIds)
+        .order('created_at', { ascending: false });
 
-        if (fullAssData && !fullAssErr) {
-          const classNameMap: Record<string, string> = {};
-          if (clsData) {
-            clsData.forEach((c: any) => {
-              const rawName = (c.name || '').replace(/\s*\[EDU[A-Z0-9]+\]/i, '').trim();
-              classNameMap[c.id] = c.course_name || rawName || 'Mata Pelajaran';
-            });
-          }
-          setAllEnrolledAssignments(
-            fullAssData.map((a: any) => ({
-              id: a.id,
-              classId: String(a.class_id || '').trim(),
-              title: a.title,
-              subject: classNameMap[a.class_id] || 'Mata Pelajaran',
-              dueDate: a.due_date
-                ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
-                : a.due_at
-                ? new Date(a.due_at).toLocaleDateString('id-ID')
-                : 'Tanpa Tenggat',
-              maxScore: a.max_score || 100,
-              status: (submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan') as 'Belum Dikumpulkan' | 'Sudah Dikumpulkan',
-              description: a.description || '',
-              attachmentUrl: a.attachment_url || a.file_url || '',
-              grade: submittedMap[a.id]?.grade,
-              feedback: submittedMap[a.id]?.feedback,
-              submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
-              submittedFileUrl: submittedMap[a.id]?.fileUrl,
-            }))
-          );
+      if (fullAssData && !fullAssErr) {
+        const classNameMap: Record<string, string> = {};
+        if (clsData) {
+          clsData.forEach((c: any) => {
+            const rawName = (c.name || '').replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
+            classNameMap[c.id] = c.course_name || rawName || 'Mata Pelajaran';
+          });
         }
-      } else {
-        setAllEnrolledAssignments([]);
+        setAllEnrolledAssignments(
+          fullAssData.map((a: any) => ({
+            id: a.id,
+            classId: String(a.class_id || '').trim(),
+            title: a.title,
+            subject: classNameMap[a.class_id] || 'Mata Pelajaran',
+            dueDate: a.due_date
+              ? new Date(a.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+              : a.due_at
+              ? new Date(a.due_at).toLocaleDateString('id-ID')
+              : 'Tanpa Tenggat',
+            maxScore: a.max_score || 100,
+            status: (submittedMap[a.id] ? 'Sudah Dikumpulkan' : 'Belum Dikumpulkan') as 'Belum Dikumpulkan' | 'Sudah Dikumpulkan',
+            description: a.description || '',
+            attachmentUrl: a.attachment_url || a.file_url || '',
+            grade: submittedMap[a.id]?.grade,
+            feedback: submittedMap[a.id]?.feedback,
+            submittedAt: submittedMap[a.id]?.submittedAt ? new Date(submittedMap[a.id].submittedAt!).toLocaleString('id-ID') : undefined,
+            submittedFileUrl: submittedMap[a.id]?.fileUrl,
+          }))
+        );
       }
 
       // 6. Fetch Announcements
-      const { data: annData } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
+      const { data: annData } = await supabase
+        .from('announcements')
+        .select('*')
+        .in('class_id', classIds)
+        .order('created_at', { ascending: false });
       if (annData) {
         setAnnouncements(
           annData.map((a: any) => {
@@ -514,14 +549,90 @@ export const StudentDashboard: React.FC = () => {
     window.open(fileUrl, '_blank', 'noopener,noreferrer');
   };
 
-  // Search & Validate Class Code when student enters code in modal
+  // Helper to enroll student into a verified class row and refresh state
+  const enrollStudentIntoClassRow = async (targetClass: any) => {
+    if (!user?.id || !targetClass?.id) return false;
+
+    // 1. Check duplicate in enrollments (or class_members)
+    const { data: existingEnrollment } = await supabase
+      .from('enrollments')
+      .select('id')
+      .eq('class_id', targetClass.id)
+      .eq('student_id', user.id)
+      .maybeSingle();
+
+    if (existingEnrollment) {
+      console.log('ℹ️ [Join Class] Siswa sudah terdaftar di kelas:', targetClass.id);
+      await fetchStudentEnrolledClasses();
+      setJoinError('Anda sudah terdaftar di kelas ini.');
+      return false;
+    }
+
+    // 2. Insert into enrollments (try minimal payload first for maximum schema compatibility)
+    let { error: insertErr } = await (supabase as any)
+      .from('enrollments')
+      .insert({
+        class_id: targetClass.id,
+        student_id: user.id,
+      });
+
+    if (insertErr && !insertErr.message?.toLowerCase().includes('duplicate')) {
+      console.warn('⚠️ [Join Class] Retrying enrollments insert with extended payload:', insertErr.message);
+      const retryRes = await (supabase as any).from('enrollments').insert({
+        class_id: targetClass.id,
+        student_id: user.id,
+        status: 'active',
+        enrolled_at: new Date().toISOString(),
+      });
+      insertErr = retryRes.error;
+    }
+
+    // Fallback to class_members if enrollments table is named class_members
+    if (insertErr && !insertErr.message?.toLowerCase().includes('duplicate')) {
+      try {
+        const cmRes = await (supabase as any).from('class_members').insert({
+          class_id: targetClass.id,
+          student_id: user.id,
+        });
+        if (!cmRes.error) {
+          insertErr = null;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (insertErr && !insertErr.message?.toLowerCase().includes('duplicate')) {
+      console.error('❌ [Join Class Supabase INSERT Error]:', insertErr);
+      setJoinError(`Gagal bergabung ke kelas: ${insertErr.message}`);
+      showToastNotification('error', `Gagal bergabung ke kelas: ${insertErr.message}`);
+      return false;
+    }
+
+    // 3. Refresh Enrolled Classes State Immediately so new class appears in Ruang Belajar & Mata Pelajaran Diikuti
+    await fetchStudentEnrolledClasses();
+
+    const cleanName = String(targetClass.name || 'Kelas')
+      .replace(/\s*\[[A-Z0-9-]+\]/i, '')
+      .trim();
+
+    setShowJoinModal(false);
+    setInputClassCode('');
+    setMatchedClassPreview(null);
+    setJoinError(null);
+
+    showToastNotification('success', `✅ Berhasil bergabung ke kelas "${cleanName}"!`);
+    return true;
+  };
+
+  // Search, Validate & Join Class when student enters code in modal
   const handleCheckClassCode = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanCode = inputClassCode.trim().toUpperCase();
     console.log('🔍 [Join Class Input]:', { rawInput: inputClassCode, cleanedCode: cleanCode, studentId: user?.id });
 
     if (!cleanCode) {
-      setJoinError('Silakan masukkan kode kelas.');
+      setJoinError('Kode kelas tidak ditemukan. Pastikan kode yang dimasukkan sudah benar.');
       return;
     }
 
@@ -530,55 +641,57 @@ export const StudentDashboard: React.FC = () => {
     setMatchedClassPreview(null);
 
     try {
+      // 1. Primary lookup: case-insensitive match on classes.code using .ilike('code', cleanCode).maybeSingle()
       let foundClass: any = null;
+      const { data: singleClass, error: codeErr } = await (supabase as any)
+        .from('classes')
+        .select('*')
+        .ilike('code', cleanCode)
+        .maybeSingle();
 
-      // Strategy 1: Search by code or class_code column
-      try {
-        const { data: codeData } = await (supabase as any)
+      if (singleClass) {
+        foundClass = singleClass;
+      }
+
+      if (codeErr) {
+        console.warn('⚠️ [Join Class Primary Lookup Notice]:', codeErr.message);
+      }
+
+      // 2. Fallback lookup if multiple rows share code or code is stored in class_code / name / fallback ID
+      if (!foundClass) {
+        const { data: multiCodeData } = await supabase
           .from('classes')
           .select('*')
-          .or(`code.ilike.${cleanCode},class_code.ilike.${cleanCode}`);
-        if (codeData && codeData.length > 0) {
-          foundClass = codeData[0];
-        }
-      } catch (err1) {
-        console.warn('Strategy 1 notice:', err1);
-      }
-
-      // Strategy 2: Search by code column alone
-      if (!foundClass) {
-        try {
-          const { data: codeData2 } = await (supabase as any)
-            .from('classes')
-            .select('*')
-            .ilike('code', cleanCode);
-          if (codeData2 && codeData2.length > 0) {
-            foundClass = codeData2[0];
-          }
-        } catch (err2) {
-          console.warn('Strategy 2 notice:', err2);
+          .ilike('code', cleanCode)
+          .limit(1);
+        if (multiCodeData && multiCodeData.length > 0) {
+          foundClass = multiCodeData[0];
         }
       }
 
-      // Strategy 3: Query all classes and check code / class_code / name in memory
       if (!foundClass) {
-        try {
-          const { data: allCls } = await (supabase as any).from('classes').select('*');
-          if (allCls && allCls.length > 0) {
-            foundClass = allCls.find((c: any) => {
-              const cCode = (c.code || c.class_code || '').toString().trim().toUpperCase();
-              const cName = (c.name || '').toString().trim().toUpperCase();
-              return cCode === cleanCode || (cCode && cleanCode && cCode.includes(cleanCode)) || (cName && cleanCode && cName.includes(cleanCode));
-            });
-          }
-        } catch (err3) {
-          console.warn('Strategy 3 notice:', err3);
+        const { data: allCls } = await supabase.from('classes').select('*');
+        if (allCls && allCls.length > 0) {
+          foundClass = allCls.find((c: any) => {
+            const cCode = String(c.code || c.class_code || '').trim().toUpperCase();
+            const rawName = String(c.name || '').trim().toUpperCase();
+            const matchBracket = rawName.match(/\[([A-Z0-9-]+)\]/i);
+            const bracketCode = matchBracket ? matchBracket[1].trim().toUpperCase() : '';
+            const fallbackEvCode = `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`;
+            const fallbackEduCode = `EDU${String(c.id || '').slice(0, 5).toUpperCase()}`;
+            return (
+              cCode === cleanCode ||
+              bracketCode === cleanCode ||
+              fallbackEvCode === cleanCode ||
+              fallbackEduCode === cleanCode
+            );
+          });
         }
       }
 
       if (!foundClass) {
         console.warn('❌ [Join Class] Kode kelas tidak ditemukan di database:', cleanCode);
-        setJoinError('Kode kelas tidak ditemukan.');
+        setJoinError('Kode kelas tidak ditemukan. Pastikan kode yang dimasukkan sudah benar.');
         setIsSearchingCode(false);
         return;
       }
@@ -591,107 +704,28 @@ export const StudentDashboard: React.FC = () => {
         student_id: user?.id,
       });
 
-      // 2. Check if Class is Active
       if (foundClass.is_active === false) {
         setJoinError('Kelas sudah tidak menerima anggota baru.');
         setIsSearchingCode(false);
         return;
       }
 
-      // 3. Check if Student is Already Enrolled
-      if (user?.id) {
-        const { data: enrollCheck } = await (supabase as any)
-          .from('enrollments')
-          .select('id')
-          .eq('class_id', foundClass.id)
-          .eq('student_id', user.id);
-
-        if (enrollCheck && enrollCheck.length > 0) {
-          console.log('ℹ️ [Join Class] Siswa sudah terdaftar di kelas:', foundClass.id);
-          setJoinError('Anda sudah bergabung di kelas ini.');
-          setIsSearchingCode(false);
-          return;
-        }
-      }
-
-      // 4. Fetch Teacher Profile Name
-      let teacherName = 'Guru EduVerse';
-      let teacherAvatar = undefined;
-      if (foundClass.teacher_id) {
-        const { data: teacherProf } = await (supabase as any)
-          .from('profiles')
-          .select('full_name, avatar_url')
-          .eq('id', foundClass.teacher_id)
-          .single();
-        if (teacherProf) {
-          teacherName = teacherProf.full_name;
-          teacherAvatar = teacherProf.avatar_url;
-        }
-      }
-
-      setMatchedClassPreview({
-        ...foundClass,
-        teacherName,
-        teacherAvatar,
-      });
+      // 3. Check duplicate & immediately enroll student into the found class
+      await enrollStudentIntoClassRow(foundClass);
     } catch (err: any) {
       console.error('❌ [Join Class Verification Error]:', err);
-      setJoinError('Kode kelas tidak ditemukan.');
+      setJoinError('Kode kelas tidak ditemukan. Pastikan kode yang dimasukkan sudah benar.');
     } finally {
       setIsSearchingCode(false);
     }
   };
 
-  // Confirm Join Class & Insert to Enrollments Table
+  // Confirm Join Class & Insert to Enrollments Table (if preview card is used)
   const handleConfirmJoinClass = async () => {
     if (!matchedClassPreview || !user?.id) return;
-
     setIsSubmittingJoin(true);
-    console.log('📌 [Join Class Inserting Payload]:', {
-      class_id: matchedClassPreview.id,
-      student_id: user.id,
-      class_name: matchedClassPreview.name,
-    });
-
     try {
-      // Insert to Supabase enrollments table
-      const { data: insertData, error: insertErr } = await (supabase as any).from('enrollments').insert({
-        class_id: matchedClassPreview.id,
-        student_id: user.id,
-        status: 'active',
-        enrolled_at: new Date().toISOString(),
-      }).select();
-
-      if (insertErr && !insertErr.message.includes('duplicate')) {
-        console.error('❌ [Join Class Supabase INSERT Error]:', insertErr);
-        // Fallback insert with minimal payload
-        const { data: fallbackData, error: fallbackErr } = await (supabase as any).from('enrollments').insert({
-          class_id: matchedClassPreview.id,
-          student_id: user.id,
-        }).select();
-
-        if (fallbackErr && !fallbackErr.message.includes('duplicate')) {
-          console.error('❌ [Join Class Fallback INSERT Error]:', fallbackErr);
-          showToastNotification('error', 'Gagal bergabung ke kelas: ' + fallbackErr.message);
-          setIsSubmittingJoin(false);
-          return;
-        }
-        console.log('🎉 [Join Class Fallback INSERT Success]:', fallbackData);
-      } else {
-        console.log('🎉 [Join Class INSERT Success]:', insertData);
-      }
-
-      // Refresh Enrolled Classes State Immediately!
-      await fetchStudentEnrolledClasses();
-
-      setShowJoinModal(false);
-      setInputClassCode('');
-      setMatchedClassPreview(null);
-
-      showToastNotification('success', 'Berhasil bergabung ke kelas.');
-    } catch (err: any) {
-      console.error('❌ [Join Class Exception]:', err);
-      showToastNotification('error', 'Gagal bergabung ke kelas: ' + err.message);
+      await enrollStudentIntoClassRow(matchedClassPreview);
     } finally {
       setIsSubmittingJoin(false);
     }
@@ -1787,13 +1821,13 @@ export const StudentDashboard: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: EDU8XK21"
+                    placeholder="Contoh: EV8X2K atau A9K4M2"
                     value={inputClassCode}
                     onChange={(e) => setInputClassCode(e.target.value.toUpperCase())}
                     className="w-full px-4 py-3 rounded-2xl bg-muted/60 border border-border text-foreground font-mono font-bold text-base tracking-wider focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase"
                   />
                   <p className="text-[11px] text-muted-foreground">
-                    Kode acak 8 karakter dapat diminta kepada Guru pengampu kelas Anda.
+                    Masukkan kode unik 6–7 karakter (huruf kapital &amp; angka) dari Guru pengampu kelas Anda.
                   </p>
                 </div>
 
@@ -1810,7 +1844,7 @@ export const StudentDashboard: React.FC = () => {
                     disabled={isSearchingCode || !inputClassCode.trim()}
                     className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    {isSearchingCode ? 'Memeriksa...' : 'Cek Kode Kelas'}
+                    {isSearchingCode ? 'Memproses...' : 'Gabung Kelas Sekarang'}
                   </button>
                 </div>
               </form>
