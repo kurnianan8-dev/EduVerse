@@ -58,20 +58,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const fetchSupabaseProfile = async (authUser: any) => {
     try {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', authUser.id)
-        .single();
+        .maybeSingle();
+
+      const isPlaceholderName = (val?: string | null) => {
+        if (!val || typeof val !== 'string') return true;
+        const clean = val.trim().toLowerCase();
+        return !clean || clean === 'guru eduverse' || clean === 'pengguna eduverse' || clean === 'guru pengampu';
+      };
+
+      const emailPrefix = authUser.email ? String(authUser.email).split('@')[0] : '';
 
       if (data) {
         const profileData = data as Record<string, any>;
         const mappedRole: AppRole =
           profileData.role === 'teacher' || profileData.role === 'guru' ? 'guru' : 'siswa';
+
+        const resolvedFullName =
+          (!isPlaceholderName(profileData.full_name) ? profileData.full_name : '') ||
+          (!isPlaceholderName(profileData.name) ? profileData.name : '') ||
+          (!isPlaceholderName(authUser.user_metadata?.full_name) ? authUser.user_metadata?.full_name : '') ||
+          (!isPlaceholderName(authUser.user_metadata?.name) ? authUser.user_metadata?.name : '') ||
+          emailPrefix ||
+          authUser.email ||
+          'Akun Pengguna';
+
+        // Sync real name to public.profiles if DB still has empty or placeholder 'Guru EduVerse'
+        if (isPlaceholderName(profileData.full_name) && resolvedFullName) {
+          (supabase as any)
+            .from('profiles')
+            .update({ full_name: resolvedFullName, email: profileData.email || authUser.email })
+            .eq('id', authUser.id)
+            .then(() => {});
+        }
+
         const userProf: UserProfile = {
           id: profileData.id,
           email: profileData.email || authUser.email,
-          fullName: profileData.full_name || authUser.user_metadata?.full_name || authUser.email,
+          fullName: resolvedFullName,
           avatarUrl: profileData.avatar_url || undefined,
           role: mappedRole,
           jurusan: profileData.jurusan || authUser.user_metadata?.jurusan,
@@ -85,10 +112,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Build UserProfile directly from Auth User Metadata if table row isn't fetched yet
         const rawRole = authUser.user_metadata?.role;
         const mappedRole: AppRole = rawRole === 'teacher' || rawRole === 'guru' ? 'guru' : 'siswa';
+        const resolvedFullName =
+          (!isPlaceholderName(authUser.user_metadata?.full_name) ? authUser.user_metadata?.full_name : '') ||
+          (!isPlaceholderName(authUser.user_metadata?.name) ? authUser.user_metadata?.name : '') ||
+          emailPrefix ||
+          authUser.email ||
+          'Akun Pengguna';
+
+        // Backfill missing profile row so StudentDashboard & TeacherDashboard joins find the real name
+        (supabase as any)
+          .from('profiles')
+          .upsert({
+            id: authUser.id,
+            email: authUser.email || '',
+            full_name: resolvedFullName,
+            role: mappedRole === 'guru' ? 'teacher' : 'student',
+          })
+          .then(() => {});
+
         const userProf: UserProfile = {
           id: authUser.id,
           email: authUser.email || '',
-          fullName: authUser.user_metadata?.full_name || authUser.email || 'Pengguna EduVerse',
+          fullName: resolvedFullName,
           role: mappedRole,
           jurusan: authUser.user_metadata?.jurusan,
           qrCode: `EDU-SISWA-${authUser.id.slice(0, 8)}`,

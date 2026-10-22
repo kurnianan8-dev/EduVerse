@@ -330,17 +330,28 @@ export const StudentDashboard: React.FC = () => {
         return;
       }
 
-      // 2. Query classes for the student's enrolled classIds
-      const { data: clsData } = await supabase
+      // 2. Query classes for the student's enrolled classIds (with optional teacher profile join)
+      let clsData: any[] | null = null;
+      const { data: joinedClsData, error: joinClsErr } = await (supabase as any)
         .from('classes')
-        .select('*')
+        .select('*, teacher_profile:profiles(id, full_name, email, avatar_url)')
         .in('id', classIds);
 
-      // 3. Fetch materials, assignments, profiles map for counts
+      if (joinedClsData && !joinClsErr) {
+        clsData = joinedClsData;
+      } else {
+        const { data: plainClsData } = await supabase
+          .from('classes')
+          .select('*')
+          .in('id', classIds);
+        clsData = plainClsData;
+      }
+
+      // 3. Fetch materials, assignments, profiles map for counts & real teacher names
       const { data: matData } = await supabase.from('materials').select('id, class_id').in('class_id', classIds);
       const { data: assData } = await supabase.from('assignments').select('id, class_id').in('class_id', classIds);
       const { data: attData } = await supabase.from('attendance_records').select('class_id, status').eq('student_id', user.id);
-      const { data: teacherProfiles } = await supabase.from('profiles').select('id, full_name, avatar_url');
+      const { data: teacherProfiles } = await supabase.from('profiles').select('*');
 
       const teacherMap: Record<string, any> = {};
       if (teacherProfiles) {
@@ -348,6 +359,31 @@ export const StudentDashboard: React.FC = () => {
           teacherMap[p.id] = p;
         });
       }
+
+      const isPlaceholderGuruName = (val?: string | null): boolean => {
+        if (!val || typeof val !== 'string') return true;
+        const clean = val.trim().toLowerCase();
+        return !clean || clean === 'guru eduverse' || clean === 'pengguna eduverse' || clean === 'guru pengampu';
+      };
+
+      const resolveClassTeacherName = (classRow: any, teacherProf?: any): string => {
+        const joinedProf = Array.isArray(classRow?.teacher_profile)
+          ? classRow.teacher_profile[0]
+          : classRow?.teacher_profile;
+        const prof = teacherProf || joinedProf;
+        const candidates = [
+          prof?.full_name,
+          prof?.name,
+          classRow?.teacher_name,
+          prof?.email ? String(prof.email).split('@')[0] : '',
+        ];
+        for (const cand of candidates) {
+          if (cand && typeof cand === 'string' && !isPlaceholderGuruName(cand)) {
+            return cand.trim();
+          }
+        }
+        return 'Pengajar Kelas';
+      };
 
       const matCountMap: Record<string, number> = {};
       if (matData) {
@@ -375,41 +411,64 @@ export const StudentDashboard: React.FC = () => {
         });
       }
 
-      if (clsData) {
-        setEnrolledClasses(
-          clsData.map((c: any) => {
-            const teacher = teacherMap[c.teacher_id];
-            const att = attCountMap[c.id];
-            const attPercent = att && att.total > 0 ? Math.round((att.hadir / att.total) * 100) : 100;
-            const rawName = c.name || 'Kelas';
-            const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
-            const extractedCode = String(
-              c.code ||
-                c.class_code ||
-                (matchCode ? matchCode[1] : null) ||
-                `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
-            )
-              .trim()
-              .toUpperCase();
-            const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
+      const classTeacherMap: Record<string, { name: string; avatar?: string; courseName: string }> = {};
 
-            return {
-              id: c.id,
-              name: cleanName || rawName,
-              code: extractedCode,
-              courseName: c.course_name || 'Mata Pelajaran Umum',
-              teacherName: teacher?.full_name || 'Guru EduVerse',
-              teacherAvatar: teacher?.avatar_url || undefined,
-              description: c.description || 'Kelas pembelajaran interaktif LMS EduVerse.',
-              jurusan: c.jurusan || 'Semua Jurusan',
-              semester: c.semester || 'Ganjil',
-              academicYear: c.academic_year || '2026/2027',
-              materialCount: matCountMap[c.id] || 0,
-              assignmentCount: assCountMap[c.id] || 0,
-              attendancePercent: attPercent,
-            };
-          })
-        );
+      if (clsData) {
+        const mappedEnrolled = clsData.map((c: any) => {
+          const teacher = teacherMap[c.teacher_id];
+          const resolvedTeacherName = resolveClassTeacherName(c, teacher);
+          const resolvedTeacherAvatar =
+            teacher?.avatar_url ||
+            (Array.isArray(c.teacher_profile) ? c.teacher_profile[0]?.avatar_url : c.teacher_profile?.avatar_url) ||
+            undefined;
+
+          const att = attCountMap[c.id];
+          const attPercent = att && att.total > 0 ? Math.round((att.hadir / att.total) * 100) : 100;
+          const rawName = c.name || 'Kelas';
+          const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
+          const extractedCode = String(
+            c.code ||
+              c.class_code ||
+              (matchCode ? matchCode[1] : null) ||
+              `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
+          )
+            .trim()
+            .toUpperCase();
+          const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
+          const courseLabel = c.course_name || 'Mata Pelajaran Umum';
+
+          classTeacherMap[c.id] = {
+            name: resolvedTeacherName,
+            avatar: resolvedTeacherAvatar,
+            courseName: courseLabel,
+          };
+
+          return {
+            id: c.id,
+            name: cleanName || rawName,
+            code: extractedCode,
+            courseName: courseLabel,
+            teacherName: resolvedTeacherName,
+            teacherAvatar: resolvedTeacherAvatar,
+            description: c.description || 'Kelas pembelajaran interaktif LMS EduVerse.',
+            jurusan: c.jurusan || 'Semua Jurusan',
+            semester: c.semester || 'Ganjil',
+            academicYear: c.academic_year || '2026/2027',
+            materialCount: matCountMap[c.id] || 0,
+            assignmentCount: assCountMap[c.id] || 0,
+            attendancePercent: attPercent,
+          };
+        });
+
+        setEnrolledClasses(mappedEnrolled);
+
+        // Keep selectedClass synced with latest teacherName & counts if currently open
+        if (selectedClass?.id) {
+          const updatedSelected = mappedEnrolled.find((mc) => mc.id === selectedClass.id);
+          if (updatedSelected) {
+            setSelectedClass(updatedSelected);
+          }
+        }
       }
 
       // 4. Fetch Submissions for logged-in student
@@ -438,16 +497,27 @@ export const StudentDashboard: React.FC = () => {
         .order('created_at', { ascending: false });
 
       if (fullMats && !matErr) {
-        const mappedMats = fullMats.map((m: any) => ({
-          id: m.id,
-          classId: String(m.class_id || '').trim(),
-          title: m.title,
-          subject: 'Mata Pelajaran',
-          fileType: m.file_type || 'pdf',
-          fileUrl: m.file_url,
-          description: m.description || '',
-          createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
-        }));
+        const mappedMats = fullMats.map((m: any) => {
+          const clsInfo = classTeacherMap[m.class_id];
+          const matTeacherProf = m.teacher_id ? teacherMap[m.teacher_id] : undefined;
+          const matTeacherName =
+            (matTeacherProf && !isPlaceholderGuruName(matTeacherProf.full_name) ? matTeacherProf.full_name : '') ||
+            (matTeacherProf && !isPlaceholderGuruName(matTeacherProf.name) ? matTeacherProf.name : '') ||
+            (matTeacherProf?.email ? String(matTeacherProf.email).split('@')[0] : '') ||
+            clsInfo?.name ||
+            '';
+          const baseSubject = clsInfo?.courseName || 'Mata Pelajaran';
+          return {
+            id: m.id,
+            classId: String(m.class_id || '').trim(),
+            title: m.title,
+            subject: matTeacherName ? `${baseSubject} • Oleh: ${matTeacherName}` : baseSubject,
+            fileType: m.file_type || 'pdf',
+            fileUrl: m.file_url,
+            description: m.description || '',
+            createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('id-ID') : '',
+          };
+        });
         setMaterials(mappedMats);
       }
 
@@ -463,7 +533,9 @@ export const StudentDashboard: React.FC = () => {
         if (clsData) {
           clsData.forEach((c: any) => {
             const rawName = (c.name || '').replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
-            classNameMap[c.id] = c.course_name || rawName || 'Mata Pelajaran';
+            const tName = classTeacherMap[c.id]?.name;
+            const courseTitle = c.course_name || rawName || 'Mata Pelajaran';
+            classNameMap[c.id] = tName ? `${courseTitle} (${tName})` : courseTitle;
           });
         }
         setAllEnrolledAssignments(
@@ -499,13 +571,20 @@ export const StudentDashboard: React.FC = () => {
         setAnnouncements(
           annData.map((a: any) => {
             const t = teacherMap[a.teacher_id];
+            const clsInfo = classTeacherMap[a.class_id];
+            const resolvedAnnTeacher =
+              (t && !isPlaceholderGuruName(t.full_name) ? t.full_name : '') ||
+              (t && !isPlaceholderGuruName(t.name) ? t.name : '') ||
+              (t?.email ? String(t.email).split('@')[0] : '') ||
+              clsInfo?.name ||
+              'Pengajar Kelas';
             return {
               id: a.id,
               classId: a.class_id,
               title: a.title,
               content: a.content,
-              teacherName: t?.full_name || 'Guru Pengampu',
-              teacherAvatar: t?.avatar_url,
+              teacherName: resolvedAnnTeacher,
+              teacherAvatar: t?.avatar_url || clsInfo?.avatar,
               createdAt: new Date(a.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
             };
           })
@@ -1132,8 +1211,8 @@ export const StudentDashboard: React.FC = () => {
                             <p className="text-xs text-muted-foreground">{a.description}</p>
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs text-muted-foreground border-t border-border pt-3 gap-2">
                               <div className="space-y-0.5">
-                                <div>Deadline: <strong className="text-amber-600">{a.dueDate}</strong></div>
-                                <div>Nilai Maksimal: <strong>{a.maxScore || 100} Poin</strong></div>
+                                <div>Guru Pengampu: <strong className="text-foreground">{selectedClass.teacherName}</strong></div>
+                                <div>Deadline: <strong className="text-amber-600">{a.dueDate}</strong> • Nilai Maksimal: <strong>{a.maxScore || 100} Poin</strong></div>
                               </div>
                               {a.grade !== undefined && (
                                 <span className="font-bold text-emerald-600">Nilai: {a.grade} / {a.maxScore || 100}</span>
@@ -1160,35 +1239,36 @@ export const StudentDashboard: React.FC = () => {
                   <QrCode className="w-5 h-5 text-blue-600" /> Kartu QR Presensi Kelas
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Tunjukkan QR Code ini kepada Guru saat sesi presensi berlangsung. Tanggal &amp; waktu hadir tercatat otomatis saat dipindai.
+                  Tunjukkan QR Code kontras tinggi ini kepada Guru ({selectedClass.teacherName}) saat sesi presensi berlangsung.
                 </p>
               </div>
 
-              <div className="p-6 rounded-2xl bg-white text-slate-900 shadow-xl inline-block w-full border border-slate-200 space-y-3">
+              <div className="p-6 rounded-3xl bg-white text-slate-900 shadow-2xl inline-block w-full border-2 border-slate-200 space-y-3">
                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                   <Calendar className="w-3.5 h-3.5" /> {studentTodayIndonesian}
                 </div>
 
-                <div className="flex justify-center py-1">
-                  <QRCodeSVG
-                    id="student-qr-svg"
-                    value={JSON.stringify({
-                      app: 'EDUVERSE',
-                      type: 'STUDENT_ATTENDANCE_QR',
-                      v: '1.1',
-                      sid: user?.id || '',
-                      code: studentQrCode,
-                      name: user?.fullName || '',
-                      email: user?.email || '',
-                      jurusan: studentJurusan,
-                      classId: selectedClass?.id || '',
-                      date: studentTodayYYYYMMDD,
-                      scanned_at: qrGeneratedAt.toISOString(),
-                    })}
-                    size={220}
-                    level="H"
-                    includeMargin={true}
-                  />
+                {/* High-Contrast QR Code with generous white quiet-zone padding for instant camera focus */}
+                <div className="flex justify-center py-2">
+                  <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-inner inline-flex items-center justify-center">
+                    <QRCodeSVG
+                      id="student-qr-svg"
+                      value={JSON.stringify({
+                        sid: user?.id || '',
+                        code: studentQrCode,
+                        name: user?.fullName || '',
+                        email: user?.email || '',
+                        jurusan: studentJurusan,
+                        classId: selectedClass?.id || '',
+                        date: studentTodayYYYYMMDD,
+                      })}
+                      size={260}
+                      bgColor="#FFFFFF"
+                      fgColor="#000000"
+                      level="M"
+                      includeMargin={true}
+                    />
+                  </div>
                 </div>
                 <div className="border-t border-slate-200 pt-3 flex items-center justify-center gap-3 text-left">
                   <UserAvatar src={user?.avatarUrl} name={user?.fullName} size="md" />

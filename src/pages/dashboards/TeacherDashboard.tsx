@@ -53,6 +53,9 @@ interface ClassItem {
   name: string;
   code: string;
   courseName: string;
+  teacherId?: string;
+  teacherName?: string;
+  teacherAvatar?: string;
   description?: string;
   jurusan?: string;
   semester?: string;
@@ -149,11 +152,36 @@ const formatIndonesianDateTime = (dateInput: Date | string | number = new Date()
   return `${dateStr} - ${timeStr} WIB`;
 };
 
+// Instant Web Audio API Beep (< 20ms latency) for QR Scan Confirmation
+const playInstantScanBeep = () => {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1046.5, ctx.currentTime); // C6 crisp chime
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.12);
+    setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 200);
+  } catch {
+    // ignore audio context restrictions
+  }
+};
+
 interface AnnouncementItem {
   id: string;
   classId: string;
   title: string;
   content: string;
+  teacherName?: string;
   createdAt: string;
 }
 
@@ -474,12 +502,48 @@ export const TeacherDashboard: React.FC = () => {
   // Scanner References & States
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const isScanningRef = useRef<boolean>(false);
+  const isProcessingScanRef = useRef<boolean>(false);
   const lastScannedCodeRef = useRef<string>('');
   const lastScannedTimeRef = useRef<number>(0);
+  const [isProcessingScan, setIsProcessingScan] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [attendanceMode, setAttendanceMode] = useState<'masuk' | 'pulang'>('masuk');
   const [attendanceNotice, setAttendanceNotice] = useState<string | null>(null);
+
+  const isPlaceholderTeacherName = (val?: string | null): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const clean = val.trim().toLowerCase();
+    return !clean || clean === 'guru eduverse' || clean === 'pengguna eduverse' || clean === 'guru pengampu';
+  };
+
+  // Resolve real teacher name in strict priority order:
+  // profile?.full_name || profile?.name || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0]
+  const resolveTeacherRealName = (
+    profile?: Record<string, any> | null,
+    authUser?: Record<string, any> | null,
+    classTeacherName?: string | null
+  ): string => {
+    const candidates = [
+      profile?.full_name,
+      profile?.name,
+      authUser?.user_metadata?.full_name,
+      authUser?.user_metadata?.name,
+      user?.fullName,
+      classTeacherName,
+      profile?.email ? String(profile.email).split('@')[0] : '',
+      authUser?.email ? String(authUser.email).split('@')[0] : '',
+      user?.email ? String(user.email).split('@')[0] : '',
+    ];
+    for (const c of candidates) {
+      if (c && typeof c === 'string' && !isPlaceholderTeacherName(c)) {
+        return c.trim();
+      }
+    }
+    return user?.email ? String(user.email).split('@')[0] : 'Pengajar';
+  };
+
+  const currentTeacherDisplayName = resolveTeacherRealName(null, null, null);
   const [sessionResetTimestamps, setSessionResetTimestamps] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem('eduverse_attendance_session_reset_v1');
@@ -578,7 +642,7 @@ export const TeacherDashboard: React.FC = () => {
   // Fetch real data from Supabase DB on mount
   useEffect(() => {
     fetchSupabaseData();
-  }, []);
+  }, [user?.id]);
 
   // When selectedClass changes, fetch members & announcements for that class
   useEffect(() => {
@@ -589,13 +653,41 @@ export const TeacherDashboard: React.FC = () => {
 
   const fetchSupabaseData = async () => {
     try {
-      // 0. Fetch all profiles map
+      // 0. Fetch current auth user & all profiles map
+      const { data: authData } = await supabase.auth.getUser();
+      const authUser = authData?.user || null;
+      const activeTeacherId = authUser?.id || user?.id || '';
+
       const { data: allProfiles } = await supabase.from('profiles').select('*');
       const profilesMap: Record<string, any> = {};
       if (allProfiles) {
         allProfiles.forEach((p: any) => {
           profilesMap[p.id] = p;
         });
+      }
+
+      const loggedInTeacherProfile = activeTeacherId ? profilesMap[activeTeacherId] : null;
+      const loggedInTeacherRealName = resolveTeacherRealName(loggedInTeacherProfile, authUser, null);
+
+      // Sync teacher's real name to public.profiles if missing or set to 'Guru EduVerse'
+      if (activeTeacherId && loggedInTeacherRealName) {
+        if (!loggedInTeacherProfile || isPlaceholderTeacherName(loggedInTeacherProfile.full_name)) {
+          (supabase as any)
+            .from('profiles')
+            .upsert({
+              id: activeTeacherId,
+              email: loggedInTeacherProfile?.email || authUser?.email || user?.email || '',
+              full_name: loggedInTeacherRealName,
+              role: loggedInTeacherProfile?.role || 'teacher',
+            })
+            .then(() => {});
+          profilesMap[activeTeacherId] = {
+            ...(loggedInTeacherProfile || {}),
+            id: activeTeacherId,
+            full_name: loggedInTeacherRealName,
+            email: loggedInTeacherProfile?.email || authUser?.email || user?.email || '',
+          };
+        }
       }
 
       // 1. Materials
@@ -679,7 +771,7 @@ export const TeacherDashboard: React.FC = () => {
         );
       }
 
-      // 4.5 Classes from Supabase DB
+      // 4.5 Classes from Supabase DB (with real teacher profile resolution & legacy sync)
       const { data: clsData } = await supabase.from('classes').select('*').order('created_at', { ascending: false });
       if (clsData && clsData.length > 0) {
         const { data: enrollData } = await supabase.from('enrollments').select('class_id');
@@ -704,13 +796,41 @@ export const TeacherDashboard: React.FC = () => {
               .toUpperCase();
             const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
 
-            // Backfill code column in Supabase if missing or not normalized
-            if (!c.code || String(c.code).trim().toUpperCase() !== extractedCode) {
+            const classOwnerId = c.teacher_id || activeTeacherId;
+            const ownerProfile = classOwnerId ? profilesMap[classOwnerId] : loggedInTeacherProfile;
+            const isOwnedByCurrentTeacher = !c.teacher_id || c.teacher_id === activeTeacherId;
+
+            const resolvedClassTeacherName = resolveTeacherRealName(
+              ownerProfile,
+              isOwnedByCurrentTeacher ? authUser : null,
+              c.teacher_name
+            );
+
+            // Backfill code and sync real teacher_name / teacher_id on older classes that still say 'Guru EduVerse'
+            const needsCodeUpdate = !c.code || String(c.code).trim().toUpperCase() !== extractedCode;
+            const needsTeacherSync =
+              (!c.teacher_id && !!activeTeacherId) ||
+              (c.teacher_name !== undefined && isPlaceholderTeacherName(c.teacher_name));
+
+            if (needsCodeUpdate || needsTeacherSync) {
+              const updatePayload: Record<string, any> = { code: extractedCode };
+              if (!c.teacher_id && activeTeacherId) {
+                updatePayload.teacher_id = activeTeacherId;
+              }
+              if (c.teacher_name !== undefined && resolvedClassTeacherName) {
+                updatePayload.teacher_name = resolvedClassTeacherName;
+              }
               (supabase as any)
                 .from('classes')
-                .update({ code: extractedCode })
+                .update(updatePayload)
                 .eq('id', c.id)
-                .then(() => {});
+                .then(({ error: syncErr }: any) => {
+                  if (syncErr && updatePayload.teacher_name) {
+                    // Fallback if teacher_name column does not exist in classes schema
+                    delete updatePayload.teacher_name;
+                    (supabase as any).from('classes').update(updatePayload).eq('id', c.id).then(() => {});
+                  }
+                });
             }
 
             return {
@@ -718,6 +838,9 @@ export const TeacherDashboard: React.FC = () => {
               name: cleanName || rawName,
               code: extractedCode,
               courseName: c.course_name || 'Mata Pelajaran Umum',
+              teacherId: classOwnerId,
+              teacherName: resolvedClassTeacherName,
+              teacherAvatar: ownerProfile?.avatar_url || user?.avatarUrl,
               description: c.description || '',
               jurusan: c.jurusan || 'Semua Jurusan',
               semester: c.semester || 'Ganjil',
@@ -898,6 +1021,7 @@ export const TeacherDashboard: React.FC = () => {
             classId: a.class_id,
             title: a.title,
             content: a.content,
+            teacherName: selectedClass?.teacherName || currentTeacherDisplayName,
             createdAt: new Date(a.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
           }))
         );
@@ -909,6 +1033,8 @@ export const TeacherDashboard: React.FC = () => {
 
   // Safe Cleanup Scanner
   const safeCleanupScanner = async () => {
+    isProcessingScanRef.current = false;
+    setIsProcessingScan(false);
     if (scannerRef.current) {
       try {
         if (isScanningRef.current) {
@@ -924,7 +1050,7 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Robust Camera QR Scanner Lifecycle
+  // High-Speed Camera QR Scanner Lifecycle (30 FPS, Native BarcodeDetector, Instant Rear Camera)
   useEffect(() => {
     let isMounted = true;
     let animFrameId: number;
@@ -933,13 +1059,14 @@ export const TeacherDashboard: React.FC = () => {
     if (showScanModal) {
       setCameraError(null);
       isScanningRef.current = false;
+      isProcessingScanRef.current = false;
+      setIsProcessingScan(false);
 
       const initCameraScanner = () => {
         animFrameId = requestAnimationFrame(async () => {
           const videoContainer = document.getElementById('reader');
           if (!videoContainer) {
-            console.warn('📌 [QR Scanner] DOM #reader element not ready. Retrying...');
-            timerId = setTimeout(initCameraScanner, 200);
+            timerId = setTimeout(initCameraScanner, 50);
             return;
           }
 
@@ -947,50 +1074,66 @@ export const TeacherDashboard: React.FC = () => {
             await safeCleanupScanner();
             if (!isMounted) return;
 
-            const html5QrCode = new Html5Qrcode('reader');
+            // Enable native browser BarcodeDetector hardware acceleration if supported
+            const html5QrCode = new Html5Qrcode('reader', {
+              experimentalFeatures: {
+                useBarCodeDetectorIfSupported: true,
+              },
+              verbose: false,
+            } as any);
             scannerRef.current = html5QrCode;
 
-            let targetCameraId: string | { facingMode: string } = { facingMode: 'environment' };
-
-            try {
-              const devices = await Html5Qrcode.getCameras();
-              if (devices && devices.length > 0) {
-                const backCam = devices.find((d) =>
-                  d.label.toLowerCase().includes('back') ||
-                  d.label.toLowerCase().includes('rear') ||
-                  d.label.toLowerCase().includes('environment') ||
-                  d.label.toLowerCase().includes('belakang')
-                );
-                if (backCam) {
-                  targetCameraId = backCam.id;
-                } else {
-                  targetCameraId = devices[devices.length - 1].id;
-                }
-              }
-            } catch (devErr) {
-              console.warn('📌 [QR Camera Devices Query Notice]:', devErr);
-            }
-
             const qrConfig = {
-              fps: 15,
-              qrbox: { width: 220, height: 220 },
+              fps: 30,
+              qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+                const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+                const dynamicSize = Math.floor(minEdge * 0.78);
+                const clampedSize = Math.max(200, Math.min(dynamicSize, 320));
+                return { width: clampedSize, height: clampedSize };
+              },
               aspectRatio: 1.0,
+              disableFlip: false,
             };
 
-            await html5QrCode.start(
-              targetCameraId,
-              qrConfig,
-              (decodedText) => {
-                const now = Date.now();
-                if (decodedText === lastScannedCodeRef.current && now - lastScannedTimeRef.current < 2500) {
-                  return;
+            const onScanSuccessHandler = (decodedText: string) => {
+              if (isProcessingScanRef.current) return;
+              const now = Date.now();
+              if (decodedText === lastScannedCodeRef.current && now - lastScannedTimeRef.current < 1800) {
+                return;
+              }
+              lastScannedCodeRef.current = decodedText;
+              lastScannedTimeRef.current = now;
+              processAutoScan(decodedText);
+            };
+
+            // Start immediately with rear camera (environment) without blocking on slow device enumeration
+            try {
+              await html5QrCode.start(
+                { facingMode: 'environment' },
+                qrConfig,
+                onScanSuccessHandler,
+                () => {}
+              );
+            } catch {
+              // Fallback: enumerate cameras or use front/default camera if environment constraint fails on desktop
+              let fallbackCamera: string | { facingMode: string } = { facingMode: 'user' };
+              try {
+                const devices = await Html5Qrcode.getCameras();
+                if (devices && devices.length > 0) {
+                  const backCam = devices.find(
+                    (d) =>
+                      d.label.toLowerCase().includes('back') ||
+                      d.label.toLowerCase().includes('rear') ||
+                      d.label.toLowerCase().includes('environment') ||
+                      d.label.toLowerCase().includes('belakang')
+                  );
+                  fallbackCamera = backCam ? backCam.id : devices[devices.length - 1].id;
                 }
-                lastScannedCodeRef.current = decodedText;
-                lastScannedTimeRef.current = now;
-                processAutoScan(decodedText);
-              },
-              () => {}
-            );
+              } catch {
+                // use facingMode: 'user'
+              }
+              await html5QrCode.start(fallbackCamera, qrConfig, onScanSuccessHandler, () => {});
+            }
 
             isScanningRef.current = true;
           } catch (err: any) {
@@ -1002,7 +1145,7 @@ export const TeacherDashboard: React.FC = () => {
         });
       };
 
-      timerId = setTimeout(initCameraScanner, 300);
+      initCameraScanner();
     } else {
       safeCleanupScanner();
     }
@@ -1015,10 +1158,37 @@ export const TeacherDashboard: React.FC = () => {
     };
   }, [showScanModal]);
 
-  // Automatic Scan Processing & Supabase Insertion
+  // Instant Scan Feedback & Background Supabase Insertion
   const processAutoScan = async (scannedCode: string) => {
     const cleanCode = scannedCode.trim();
-    if (!cleanCode) return;
+    if (!cleanCode || isProcessingScanRef.current) return;
+
+    // 1. Lock immediately & pause camera stream to prevent duplicate callbacks / UI freeze
+    isProcessingScanRef.current = true;
+    setIsProcessingScan(true);
+    try {
+      if (scannerRef.current && isScanningRef.current) {
+        scannerRef.current.pause(true);
+      }
+    } catch {
+      // ignore if pause not supported in current state
+    }
+
+    // 2. Instant Audio Beep + Haptic Vibration (< 20ms)
+    playInstantScanBeep();
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        navigator.vibrate(80);
+      } catch {
+        // ignore
+      }
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const todayDateStr = getLocalDateYYYYMMDD(now);
+    const formattedDateTime = formatIndonesianDateTime(now);
+    const targetClassId = selectedClass?.id || null;
 
     try {
       let extractedUUID = '';
@@ -1026,12 +1196,10 @@ export const TeacherDashboard: React.FC = () => {
       let jsonName = '';
       let jsonEmail = '';
       let jsonJurusan = '';
-      let isJsonFormat = false;
 
       try {
         const parsed = JSON.parse(cleanCode);
         if (parsed && typeof parsed === 'object') {
-          isJsonFormat = true;
           extractedUUID = parsed.sid || parsed.studentId || parsed.id || '';
           jsonCodeParam = parsed.code || '';
           jsonName = parsed.name || '';
@@ -1039,71 +1207,82 @@ export const TeacherDashboard: React.FC = () => {
           jsonJurusan = parsed.jurusan || '';
         }
       } catch {
-        // Plain text
+        // Plain text QR code
       }
 
       if (!extractedUUID) {
         extractedUUID = cleanCode.replace(/^EDU-SISWA-/i, '').trim();
       }
 
-      let studentProfiles: any[] | null = null;
-      if (extractedUUID) {
-        const { data } = await supabase.from('profiles').select('*').eq('id', extractedUUID);
-        if (data && data.length > 0) studentProfiles = data;
+      // 3. Instant Visual Feedback (< 50ms) before waiting for network roundtrip!
+      const instantPreviewName = jsonName || (jsonEmail ? jsonEmail.split('@')[0] : '') || '';
+      if (instantPreviewName) {
+        setScanFeedback({
+          type: 'success',
+          message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${instantPreviewName} • ${formattedDateTime}`,
+        });
+      } else {
+        setScanFeedback({
+          type: 'success',
+          message: `⚡ QR Terdeteksi! Memverifikasi kehadiran siswa...`,
+        });
       }
 
-      if ((!studentProfiles || studentProfiles.length === 0) && extractedUUID && extractedUUID.length >= 8) {
-        const fallbackName = jsonName || (jsonEmail ? jsonEmail.split('@')[0] : '') || `Siswa`;
-        studentProfiles = [{
+      // 4. Resolve student profile (check local enrolledStudents cache first for 0ms lookup!)
+      let student: any = null;
+      const cachedStudent = enrolledStudents.find(
+        (st) => st.id === extractedUUID || (jsonEmail && st.email === jsonEmail)
+      );
+      if (cachedStudent) {
+        student = {
+          id: cachedStudent.id,
+          email: cachedStudent.email,
+          full_name: cachedStudent.fullName,
+          avatar_url: cachedStudent.avatarUrl,
+          jurusan: cachedStudent.jurusan || jsonJurusan || 'Teknik / Umum',
+          qr_code: jsonCodeParam || `EDU-SISWA-${cachedStudent.id.slice(0, 8)}`,
+        };
+      }
+
+      if (!student && extractedUUID) {
+        const { data } = await supabase.from('profiles').select('*').eq('id', extractedUUID).maybeSingle();
+        if (data) student = data;
+      }
+
+      if (!student && extractedUUID && extractedUUID.length >= 6) {
+        const fallbackName = jsonName || (jsonEmail ? jsonEmail.split('@')[0] : '') || 'Siswa';
+        student = {
           id: extractedUUID,
           email: jsonEmail || `siswa_${extractedUUID.slice(0, 8)}@eduverse.school`,
           full_name: fallbackName,
           role: 'student',
           jurusan: jsonJurusan || 'Umum',
           qr_code: jsonCodeParam || cleanCode || `EDU-SISWA-${extractedUUID.slice(0, 8)}`,
-        }];
+        };
       }
 
-      if (!studentProfiles || studentProfiles.length === 0) {
+      if (!student) {
         setScanFeedback({
           type: 'error',
           message: '❌ QR Code tidak terdaftar di database sekolah.',
         });
-        setTimeout(() => setScanFeedback(null), 3500);
+        setTimeout(() => setScanFeedback(null), 3000);
         return;
       }
 
-      const student = studentProfiles[0];
-      const targetClassId = selectedClass?.id || null;
-      const now = new Date();
-      const nowIso = now.toISOString();
-      const todayDateStr = getLocalDateYYYYMMDD(now);
-      const formattedDateTime = formatIndonesianDateTime(now);
+      const resolvedStudentName = student.full_name || jsonName || student.email || 'Siswa';
+      const resolvedQrCode =
+        student.qr_code || jsonCodeParam || (cleanCode.startsWith('{') ? `EDU-SISWA-${String(student.id).slice(0, 8)}` : cleanCode);
 
-      try {
-        await (supabase as any).from('attendance_records').insert({
-          student_id: student.id,
-          profile_id: student.id,
-          class_id: targetClassId,
-          qr_code: student.qr_code || jsonCodeParam || cleanCode,
-          attendance_type: 'qr',
-          session: attendanceMode,
-          session_id: `${attendanceMode}_${todayDateStr}`,
-          status: attendanceMode === 'pulang' ? 'pulang' : 'hadir',
-          scanned_at: nowIso,
-        });
-      } catch (dbErr) {
-        console.warn('Attendance DB insert notice:', dbErr);
-      }
-
+      // 5. Update UI State Immediately
       const newRecord: AttendanceRecord = {
         id: `att-${now.getTime()}`,
         classId: targetClassId || undefined,
         studentId: student.id,
-        studentName: student.full_name || student.email,
+        studentName: resolvedStudentName,
         avatarUrl: student.avatar_url,
-        jurusan: student.jurusan || 'Teknik / Umum',
-        qrCode: student.qr_code || jsonCodeParam || cleanCode,
+        jurusan: student.jurusan || jsonJurusan || 'Teknik / Umum',
+        qrCode: resolvedQrCode,
         status: attendanceMode === 'pulang' ? 'Sakit' : 'Hadir',
         scannedAt: formattedDateTime,
         scannedDate: todayDateStr,
@@ -1121,15 +1300,46 @@ export const TeacherDashboard: React.FC = () => {
 
       setScanFeedback({
         type: 'success',
-        message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${student.full_name} • ${formattedDateTime}`,
+        message: `✅ Absensi ${attendanceMode.toUpperCase()} Berhasil: ${resolvedStudentName} • ${formattedDateTime}`,
       });
-      setTimeout(() => setScanFeedback(null), 4000);
+      setTimeout(() => setScanFeedback(null), 3500);
+
+      // 6. Save to Supabase in the background (non-blocking for UI responsiveness)
+      (supabase as any)
+        .from('attendance_records')
+        .insert({
+          student_id: student.id,
+          profile_id: student.id,
+          class_id: targetClassId,
+          qr_code: resolvedQrCode,
+          attendance_type: 'qr',
+          session: attendanceMode,
+          session_id: `${attendanceMode}_${todayDateStr}`,
+          status: attendanceMode === 'pulang' ? 'pulang' : 'hadir',
+          scanned_at: nowIso,
+        })
+        .then(({ error: dbErr }: any) => {
+          if (dbErr) console.warn('Attendance DB insert notice:', dbErr.message);
+        });
     } catch (err: any) {
       setScanFeedback({
         type: 'error',
         message: `⚠️ Error Absensi: ${err.message}`,
       });
-      setTimeout(() => setScanFeedback(null), 3500);
+      setTimeout(() => setScanFeedback(null), 3000);
+    } finally {
+      // Resume scanner after short cooldown so next student can scan smoothly
+      setTimeout(() => {
+        try {
+          if (scannerRef.current && isScanningRef.current) {
+            scannerRef.current.resume();
+          }
+        } catch {
+          // ignore
+        }
+        isProcessingScanRef.current = false;
+        setIsProcessingScan(false);
+      }, 950);
     }
   };
 
@@ -1170,10 +1380,43 @@ export const TeacherDashboard: React.FC = () => {
       const rawCodeInput = (newClass.code || '').trim().toUpperCase().replace(/\s+/g, '');
       const generatedCode = (rawCodeInput || generateUniqueClassCode()).trim().toUpperCase();
 
+      // Resolve logged-in teacher's real name in priority order:
+      // profile?.full_name || profile?.name || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0]
+      const { data: authData } = await supabase.auth.getUser();
+      const authUser = authData?.user || null;
+      const currentTeacherId = authUser?.id || user?.id;
+
+      let teacherProfileRow: any = null;
+      if (currentTeacherId) {
+        const { data: profRow } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', currentTeacherId)
+          .maybeSingle();
+        teacherProfileRow = profRow;
+      }
+
+      const teacherRealName = resolveTeacherRealName(teacherProfileRow, authUser, null);
+
+      // Ensure teacher's real name is persisted in public.profiles so StudentDashboard joins always display it
+      if (currentTeacherId && teacherRealName) {
+        try {
+          await (supabase as any).from('profiles').upsert({
+            id: currentTeacherId,
+            email: teacherProfileRow?.email || authUser?.email || user?.email || '',
+            full_name: teacherRealName,
+            role: teacherProfileRow?.role || 'teacher',
+          });
+        } catch {
+          // ignore if RLS restricts upsert
+        }
+      }
+
       console.log('📌 [Teacher Class Create Request]:', {
         name: cleanClassName,
         code: generatedCode,
-        teacher_id: user?.id,
+        teacher_id: currentTeacherId,
+        teacher_name: teacherRealName,
       });
 
       // Fetch active school_id and course_id from DB if available
@@ -1190,13 +1433,14 @@ export const TeacherDashboard: React.FC = () => {
         if (crsData && crsData.length > 0) courseId = crsData[0].id;
       } catch (eCrs) {}
 
-      // Strategy 1: Standard classes payload with code in UPPERCASE
+      // Strategy 1: Standard classes payload with teacher_name & teacher_id and code in UPPERCASE
       let { data, error } = await (supabase as any)
         .from('classes')
         .insert({
           name: cleanClassName,
           code: generatedCode,
-          teacher_id: user?.id,
+          teacher_id: currentTeacherId,
+          teacher_name: teacherRealName,
           school_id: schoolId,
           course_id: courseId,
           course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
@@ -1208,6 +1452,28 @@ export const TeacherDashboard: React.FC = () => {
         })
         .select();
 
+      // Strategy 1b: If teacher_name column does not exist yet in classes table, retry Strategy 1 without teacher_name
+      if (error && error.message?.toLowerCase().includes('teacher_name')) {
+        const retry1b = await (supabase as any)
+          .from('classes')
+          .insert({
+            name: cleanClassName,
+            code: generatedCode,
+            teacher_id: currentTeacherId,
+            school_id: schoolId,
+            course_id: courseId,
+            course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
+            description: (newClass.description || '').trim(),
+            jurusan: newClass.jurusan || 'Semua Jurusan',
+            semester: newClass.semester || 'Ganjil',
+            academic_year: '2026/2027',
+            is_active: true,
+          })
+          .select();
+        data = retry1b.data;
+        error = retry1b.error;
+      }
+
       // Strategy 2: Retry without school_id/course_id if FK/column constraints differ
       if (error) {
         console.warn('⚠️ Retrying class insert (Strategy 2 - without school_id/course_id):', error.message);
@@ -1216,7 +1482,7 @@ export const TeacherDashboard: React.FC = () => {
           .insert({
             name: cleanClassName,
             code: generatedCode,
-            teacher_id: user?.id,
+            teacher_id: currentTeacherId,
             course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
             description: (newClass.description || '').trim(),
             jurusan: newClass.jurusan || 'Semua Jurusan',
@@ -1237,7 +1503,7 @@ export const TeacherDashboard: React.FC = () => {
           .insert({
             name: cleanClassName,
             code: generatedCode,
-            teacher_id: user?.id,
+            teacher_id: currentTeacherId,
             academic_year: '2026/2027',
           })
           .select();
@@ -1253,7 +1519,7 @@ export const TeacherDashboard: React.FC = () => {
           .insert({
             name: `${cleanClassName} [${generatedCode}]`,
             class_code: generatedCode,
-            teacher_id: user?.id,
+            teacher_id: currentTeacherId,
           })
           .select();
         data = retry4.data;
@@ -1283,6 +1549,9 @@ export const TeacherDashboard: React.FC = () => {
         name: cleanClassName,
         code: savedCode,
         courseName: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
+        teacherId: currentTeacherId,
+        teacherName: teacherRealName,
+        teacherAvatar: teacherProfileRow?.avatar_url || user?.avatarUrl,
         description: (newClass.description || '').trim(),
         jurusan: newClass.jurusan || 'Semua Jurusan',
         semester: newClass.semester || 'Ganjil',
@@ -1303,7 +1572,7 @@ export const TeacherDashboard: React.FC = () => {
       setShowClassModal(false);
 
       alert(
-        `✅ Kelas "${cleanClassName}" berhasil dibuat dan tersimpan di Database Supabase!\n\n` +
+        `✅ Kelas "${cleanClassName}" berhasil dibuat oleh ${teacherRealName} dan tersimpan di Database Supabase!\n\n` +
           `Kode Kelas Unik: ${savedCode}\n\n` +
           `Bagikan Kode Kelas ini kepada siswa agar dapat langsung bergabung.`
       );
@@ -2071,7 +2340,7 @@ export const TeacherDashboard: React.FC = () => {
                 </div>
                 <h1 className="text-2xl sm:text-3xl font-display font-extrabold text-white mt-1">{selectedClass.name}</h1>
                 <p className="text-xs text-slate-300">
-                  {selectedClass.jurusan} • {selectedClass.semester} • <strong>{enrolledStudents.length} Siswa Terdaftar</strong>
+                  Guru Pengampu: <strong className="text-white">{selectedClass.teacherName || currentTeacherDisplayName}</strong> • {selectedClass.jurusan} • {selectedClass.semester} • <strong>{enrolledStudents.length} Siswa Terdaftar</strong>
                 </p>
               </div>
 
@@ -2169,9 +2438,14 @@ export const TeacherDashboard: React.FC = () => {
                     <p className="text-xs text-muted-foreground italic py-3">Belum ada pengumuman diposting untuk kelas ini.</p>
                   ) : (
                     classAnnouncements.map((ann) => (
-                      <div key={ann.id} className="p-4 rounded-2xl bg-muted/40 border border-border/60 space-y-2">
+                      <div key={ann.id} className="p-4 rounded-2xl bg-muted/40 border border-border/60 space-y-2 text-left">
                         <div className="flex items-center justify-between">
-                          <h4 className="font-bold text-sm text-foreground">{ann.title}</h4>
+                          <div>
+                            <h4 className="font-bold text-sm text-foreground">{ann.title}</h4>
+                            <span className="text-[11px] font-semibold text-teal-600">
+                              Oleh: {ann.teacherName || selectedClass.teacherName || currentTeacherDisplayName}
+                            </span>
+                          </div>
                           <span className="text-[11px] text-muted-foreground">{ann.createdAt}</span>
                         </div>
                         <p className="text-xs text-muted-foreground whitespace-pre-line">{ann.content}</p>
@@ -2565,8 +2839,12 @@ export const TeacherDashboard: React.FC = () => {
                           <p className="text-xs text-muted-foreground mt-0.5">{cls.jurusan} • {cls.semester}</p>
                         </div>
 
-                        <div className="text-xs text-muted-foreground">
-                          Siswa Terdaftar: <strong className="text-foreground">{cls.studentCount} Siswa</strong>
+                        <div className="flex items-center gap-2 pt-0.5">
+                          <UserAvatar src={cls.teacherAvatar || user?.avatarUrl} name={cls.teacherName || currentTeacherDisplayName} size="sm" />
+                          <div className="text-left">
+                            <span className="block text-xs font-bold text-foreground">{cls.teacherName || currentTeacherDisplayName}</span>
+                            <span className="block text-[10px] text-muted-foreground">Pengajar • {cls.studentCount} Siswa Terdaftar</span>
+                          </div>
                         </div>
                       </div>
 
@@ -2898,7 +3176,7 @@ export const TeacherDashboard: React.FC = () => {
                   </div>
                   <h4 className="font-bold text-base text-foreground">{cls.name}</h4>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Total Anggota: <strong className="text-foreground">{cls.studentCount} Siswa</strong>
+                    Pengajar: <strong className="text-foreground">{cls.teacherName || currentTeacherDisplayName}</strong> • <strong className="text-foreground">{cls.studentCount} Siswa</strong>
                   </p>
                 </div>
 
@@ -3042,7 +3320,7 @@ export const TeacherDashboard: React.FC = () => {
                 </span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-display font-extrabold mt-1">
-                Selamat Datang, {user?.fullName || user?.email || 'Guru'}
+                Selamat Datang, {currentTeacherDisplayName}
               </h1>
               <p className="text-xs text-slate-300">
                 Kelola kelas, materi, tugas, dan presensi siswa sekolah dalam satu dasbor modern.
@@ -3155,8 +3433,12 @@ export const TeacherDashboard: React.FC = () => {
                         <p className="text-xs text-muted-foreground mt-0.5">{cls.jurusan} • {cls.semester}</p>
                       </div>
 
-                      <div className="text-xs text-muted-foreground">
-                        Siswa Terdaftar: <strong className="text-foreground">{cls.studentCount} Siswa</strong>
+                      <div className="flex items-center gap-2 pt-0.5">
+                        <UserAvatar src={cls.teacherAvatar || user?.avatarUrl} name={cls.teacherName || currentTeacherDisplayName} size="sm" />
+                        <div className="text-left">
+                          <span className="block text-xs font-bold text-foreground">{cls.teacherName || currentTeacherDisplayName}</span>
+                          <span className="block text-[10px] text-muted-foreground">Pengajar • {cls.studentCount} Siswa Terdaftar</span>
+                        </div>
                       </div>
                     </div>
 
@@ -3536,7 +3818,9 @@ export const TeacherDashboard: React.FC = () => {
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Camera className="w-5 h-5 text-amber-600" /> Pindai QR Code Absensi Otomatis
                 </h3>
-                <p className="text-[11px] text-muted-foreground">Kamera aktif terus untuk memindai siswa berurutan.</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Mode Cepat 30 FPS • Kamera belakang otomatis mendeteksi QR Siswa dalam milidetik.
+                </p>
               </div>
               <button onClick={() => setShowScanModal(false)} className="text-muted-foreground hover:text-foreground cursor-pointer">
                 <X className="w-5 h-5" />
@@ -3568,13 +3852,23 @@ export const TeacherDashboard: React.FC = () => {
               </button>
             </div>
 
-            <div className="relative rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 min-h-[260px] aspect-square flex items-center justify-center">
-              <div id="reader" className="w-full h-full min-h-[260px] object-cover"></div>
+            <div
+              className={`relative rounded-2xl overflow-hidden bg-black border-2 transition-all min-h-[280px] aspect-square flex items-center justify-center ${
+                isProcessingScan ? 'border-emerald-500 ring-4 ring-emerald-500/30' : 'border-amber-500/50'
+              }`}
+            >
+              <div id="reader" className="w-full h-full min-h-[280px] object-cover"></div>
+              {isProcessingScan && (
+                <div className="absolute top-3 inset-x-3 px-3 py-1.5 rounded-xl bg-emerald-600/95 text-white text-xs font-bold shadow-lg flex items-center justify-center gap-1.5 animate-in fade-in duration-75">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>QR Terdeteksi — Mencatat Kehadiran...</span>
+                </div>
+              )}
             </div>
 
             {scanFeedback && (
               <div
-                className={`p-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-in zoom-in-95 ${
+                className={`p-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-in zoom-in-95 duration-75 ${
                   scanFeedback.type === 'success'
                     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                     : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
