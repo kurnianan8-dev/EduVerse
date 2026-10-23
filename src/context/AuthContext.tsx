@@ -45,7 +45,7 @@ export const translateSupabaseAuthError = (err: any): { message: string; code?: 
     code === 'email_exists'
   ) {
     return {
-      message: 'Email ini sudah terdaftar! Silakan langsung masuk (Login) atau cek email Anda jika belum melakukan aktivasi.',
+      message: 'Email ini sudah terdaftar! Silakan langsung masuk (Login) menggunakan akun Anda.',
       code: 'user_already_registered',
       isAlreadyRegistered: true,
     };
@@ -353,10 +353,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw customErr;
       }
 
-      // Detect obfuscated duplicate email when Confirm Email is enabled in Supabase
+      // Detect obfuscated duplicate email
       if (authData?.user && Array.isArray(authData.user.identities) && authData.user.identities.length === 0) {
         const dupErr: any = new Error(
-          'Email ini sudah terdaftar! Silakan langsung masuk (Login) atau cek email Anda jika belum melakukan aktivasi.'
+          'Email ini sudah terdaftar! Silakan langsung masuk (Login) menggunakan akun Anda.'
         );
         dupErr.code = 'user_already_registered';
         dupErr.isAlreadyRegistered = true;
@@ -368,9 +368,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? `EDU-SISWA-${authData.user.id.slice(0, 8)}`
           : undefined;
 
-      if (authData?.user) {
-        // Only call updateUser if an active session already exists
-        if (authData.session) {
+      let activeSession = authData?.session || null;
+      let activeAuthUser = authData?.user || null;
+
+      // Ensure session is established immediately when Confirm Email is disabled
+      if (activeAuthUser && !activeSession) {
+        const { data: signInData } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
+        if (signInData?.session) {
+          activeSession = signInData.session;
+          activeAuthUser = signInData.user;
+        }
+      }
+
+      if (activeAuthUser) {
+        if (activeSession) {
           try {
             await supabase.auth.updateUser({
               data: {
@@ -387,10 +401,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // Best-effort upsert into public.profiles
+        // Upsert into public.profiles
         try {
           await supabase.from('profiles').upsert({
-            id: authData.user.id,
+            id: activeAuthUser.id,
             email: cleanEmail,
             full_name: cleanName,
             role: dbRole,
@@ -400,14 +414,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (uErr: any) {
           console.warn('⚠️ [SignUp] Profiles upsert notice:', uErr?.message);
         }
+
+        // Set user and activeRole immediately so ProtectedRoute and RoleGuard allow direct Dashboard entry
+        const immediateProfile: UserProfile = {
+          id: activeAuthUser.id,
+          email: cleanEmail,
+          fullName: cleanName,
+          role,
+          jurusan: cleanMajor,
+          qrCode: userQrCode || `EDU-SISWA-${activeAuthUser.id.slice(0, 8)}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        setUser(immediateProfile);
+        setActiveRole(role);
       }
 
-      const needsEmailConfirmation = Boolean(authData?.user && !authData?.session);
-
       return {
-        user: authData?.user || null,
-        session: authData?.session || null,
-        needsEmailConfirmation,
+        user: activeAuthUser,
+        session: activeSession,
+        needsEmailConfirmation: false,
         qrCode: userQrCode,
       };
     } finally {
