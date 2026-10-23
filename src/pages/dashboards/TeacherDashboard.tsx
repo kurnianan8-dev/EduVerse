@@ -1818,31 +1818,66 @@ export const TeacherDashboard: React.FC = () => {
         teacher_name: teacherRealName,
       });
 
-      // Fetch active school_id and course_id from DB if available
-      let schoolId = '2fb69c98-48c0-4473-80b7-79bbf7ba5fc2';
-      let courseId = '370d99bd-23ed-4104-b531-32541f62ebd1';
+      // Fetch active school_id and course_id from DB if available (never allow null)
+      const DEFAULT_SCHOOL_ID = '2fb69c98-48c0-4473-80b7-79bbf7ba5fc2';
+      const DEFAULT_COURSE_ID = '370d99bd-23ed-4104-b531-32541f62ebd1';
+      const resolvedCourseName = (newClass.courseName || 'Mata Pelajaran Umum').trim();
+
+      let schoolId: string =
+        teacherProfileRow?.school_id ||
+        (user as any)?.schoolId ||
+        DEFAULT_SCHOOL_ID;
+      let courseId: string = DEFAULT_COURSE_ID;
 
       try {
         const { data: schData } = await (supabase as any).from('schools').select('id').limit(1);
-        if (schData && schData.length > 0) schoolId = schData[0].id;
+        if (schData && schData.length > 0 && schData[0]?.id) {
+          schoolId = schData[0].id;
+        }
       } catch (eSch) {}
+
+      if (!schoolId) {
+        schoolId = DEFAULT_SCHOOL_ID;
+      }
 
       try {
         const { data: crsData } = await (supabase as any).from('courses').select('id').limit(1);
-        if (crsData && crsData.length > 0) courseId = crsData[0].id;
+        if (crsData && crsData.length > 0 && crsData[0]?.id) {
+          courseId = crsData[0].id;
+        } else if (currentTeacherId) {
+          const { data: newCrs } = await (supabase as any)
+            .from('courses')
+            .insert({
+              school_id: schoolId,
+              teacher_id: currentTeacherId,
+              title: resolvedCourseName,
+              code: `CRS-${generatedCode}-${Date.now().toString().slice(-4)}`,
+              is_published: true,
+            })
+            .select('id')
+            .maybeSingle();
+          if (newCrs?.id) {
+            courseId = newCrs.id;
+          }
+        }
       } catch (eCrs) {}
 
-      // Strategy 1: Standard classes payload with teacher_name & teacher_id and code in UPPERCASE
+      if (!courseId) {
+        courseId = DEFAULT_COURSE_ID;
+      }
+
+      // Strategy 1: Standard classes payload with school_id, course_id, teacher_name, teacher_id, and code in UPPERCASE
       let { data, error } = await (supabase as any)
         .from('classes')
         .insert({
           name: cleanClassName,
           code: generatedCode,
+          class_code: generatedCode,
           teacher_id: currentTeacherId,
           teacher_name: teacherRealName,
           school_id: schoolId,
           course_id: courseId,
-          course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
+          course_name: resolvedCourseName,
           description: (newClass.description || '').trim(),
           jurusan: newClass.jurusan || 'Semua Jurusan',
           semester: newClass.semester || 'Ganjil',
@@ -1851,17 +1886,58 @@ export const TeacherDashboard: React.FC = () => {
         })
         .select();
 
-      // Strategy 1b: If teacher_name column does not exist yet in classes table, retry Strategy 1 without teacher_name
+      // Strategy 1a: If foreign key on course_id failed, auto-create a valid course row and retry Strategy 1
+      if (error && error.message?.toLowerCase().includes('course_id') && currentTeacherId) {
+        try {
+          const { data: createdCrs } = await (supabase as any)
+            .from('courses')
+            .insert({
+              school_id: schoolId,
+              teacher_id: currentTeacherId,
+              title: resolvedCourseName,
+              code: `CRS-${generatedCode}-${Date.now().toString().slice(-4)}`,
+              is_published: true,
+            })
+            .select('id')
+            .maybeSingle();
+          if (createdCrs?.id) {
+            courseId = createdCrs.id;
+            const retry1a = await (supabase as any)
+              .from('classes')
+              .insert({
+                name: cleanClassName,
+                code: generatedCode,
+                class_code: generatedCode,
+                teacher_id: currentTeacherId,
+                teacher_name: teacherRealName,
+                school_id: schoolId,
+                course_id: courseId,
+                course_name: resolvedCourseName,
+                description: (newClass.description || '').trim(),
+                jurusan: newClass.jurusan || 'Semua Jurusan',
+                semester: newClass.semester || 'Ganjil',
+                academic_year: '2026/2027',
+                is_active: true,
+              })
+              .select();
+            data = retry1a.data;
+            error = retry1a.error;
+          }
+        } catch {}
+      }
+
+      // Strategy 1b: If teacher_name column does not exist yet in classes table, retry with school_id & course_id
       if (error && error.message?.toLowerCase().includes('teacher_name')) {
         const retry1b = await (supabase as any)
           .from('classes')
           .insert({
             name: cleanClassName,
             code: generatedCode,
+            class_code: generatedCode,
             teacher_id: currentTeacherId,
             school_id: schoolId,
             course_id: courseId,
-            course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
+            course_name: resolvedCourseName,
             description: (newClass.description || '').trim(),
             jurusan: newClass.jurusan || 'Semua Jurusan',
             semester: newClass.semester || 'Ganjil',
@@ -1873,36 +1949,38 @@ export const TeacherDashboard: React.FC = () => {
         error = retry1b.error;
       }
 
-      // Strategy 2: Retry without school_id/course_id if FK/column constraints differ
+      // Strategy 2: Core columns while preserving NOT NULL school_id & course_id
       if (error) {
-        console.warn('⚠️ Retrying class insert (Strategy 2 - without school_id/course_id):', error.message);
+        console.warn('⚠️ Retrying class insert (Strategy 2 - core columns with school_id & course_id):', error.message);
         const retry2 = await (supabase as any)
           .from('classes')
           .insert({
             name: cleanClassName,
             code: generatedCode,
+            class_code: generatedCode,
             teacher_id: currentTeacherId,
-            course_name: (newClass.courseName || 'Mata Pelajaran Umum').trim(),
-            description: (newClass.description || '').trim(),
-            jurusan: newClass.jurusan || 'Semua Jurusan',
-            semester: newClass.semester || 'Ganjil',
+            teacher_name: teacherRealName,
+            school_id: schoolId,
+            course_id: courseId,
+            course_name: resolvedCourseName,
             academic_year: '2026/2027',
-            is_active: true,
           })
           .select();
         data = retry2.data;
         error = retry2.error;
       }
 
-      // Strategy 3: Minimal core columns (name, code, teacher_id, academic_year)
+      // Strategy 3: Minimal required columns (name, code, teacher_id, school_id, course_id, academic_year)
       if (error) {
-        console.warn('⚠️ Retrying class insert (Strategy 3 - core columns):', error.message);
+        console.warn('⚠️ Retrying class insert (Strategy 3 - minimal required with school_id & course_id):', error.message);
         const retry3 = await (supabase as any)
           .from('classes')
           .insert({
             name: cleanClassName,
             code: generatedCode,
             teacher_id: currentTeacherId,
+            school_id: schoolId,
+            course_id: courseId,
             academic_year: '2026/2027',
           })
           .select();
@@ -1910,15 +1988,18 @@ export const TeacherDashboard: React.FC = () => {
         error = retry3.error;
       }
 
-      // Strategy 4: Fallback if table uses class_code instead of code
+      // Strategy 4: Fallback if table uses class_code instead of code (still preserving school_id & course_id)
       if (error) {
-        console.warn('⚠️ Retrying class insert (Strategy 4 - class_code fallback):', error.message);
+        console.warn('⚠️ Retrying class insert (Strategy 4 - class_code fallback with school_id & course_id):', error.message);
         const retry4 = await (supabase as any)
           .from('classes')
           .insert({
             name: `${cleanClassName} [${generatedCode}]`,
             class_code: generatedCode,
             teacher_id: currentTeacherId,
+            school_id: schoolId,
+            course_id: courseId,
+            academic_year: '2026/2027',
           })
           .select();
         data = retry4.data;
