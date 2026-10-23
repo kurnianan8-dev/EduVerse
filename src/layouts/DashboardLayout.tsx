@@ -120,7 +120,6 @@ export const DashboardLayout: React.FC = () => {
             </div>
             <div>
               <span className="font-display font-bold text-xl tracking-tight text-white">EduVerse</span>
-              <span className="block text-[10px] font-semibold uppercase tracking-widest text-blue-400">Platform LMS</span>
             </div>
           </Link>
         </div>
@@ -128,14 +127,13 @@ export const DashboardLayout: React.FC = () => {
         {/* Current Active Role Indicator */}
         <div className="px-4 py-3 mx-4 mt-4 rounded-xl bg-sidebar-accent/50 border border-sidebar-border">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-            Peran Kerja Saat Ini
+            Peran Akun
           </div>
           <div className="flex items-center justify-between">
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${roleStyle.bg} ${roleStyle.text} ${roleStyle.border}`}>
               <Shield className="w-3.5 h-3.5" />
               {ROLE_LABELS[role]}
             </span>
-            <span className="text-[11px] text-blue-400 font-mono">RBAC Aktif</span>
           </div>
         </div>
 
@@ -178,7 +176,7 @@ export const DashboardLayout: React.FC = () => {
             <UserAvatar src={user?.avatarUrl} name={user?.fullName} size="md" className="border-2 border-blue-500/30" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-white truncate">{user?.fullName}</p>
-              <p className="text-xs text-slate-400 truncate">{user?.email}</p>
+              <p className="text-xs text-slate-400 truncate">{ROLE_LABELS[role]}</p>
             </div>
           </div>
         </div>
@@ -188,7 +186,7 @@ export const DashboardLayout: React.FC = () => {
       <div className="flex-1 flex flex-col min-w-0 lg:pl-72">
         {/* Topbar Header */}
         <header className="h-16 sticky top-0 z-20 bg-card/80 backdrop-blur-md border-b border-border px-4 sm:px-6 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="lg:hidden p-2 rounded-lg text-muted-foreground hover:bg-accent"
@@ -197,28 +195,21 @@ export const DashboardLayout: React.FC = () => {
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
 
-            {/* Quick Search */}
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/60 text-muted-foreground border border-border/50 text-xs w-64">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              <span>Cari mata pelajaran, pengguna, jadwal...</span>
+            <div className="flex items-center gap-2">
+              <span className="font-display font-bold text-base text-foreground">EduVerse</span>
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${roleStyle.bg} ${roleStyle.text} ${roleStyle.border}`}>
+                {ROLE_LABELS[role]}
+              </span>
             </div>
           </div>
 
           {/* Right Header Action Items */}
           <div className="flex items-center gap-3">
-
-            {/* Notifications */}
-            <button className="relative p-2 rounded-lg text-muted-foreground hover:bg-accent transition-colors" title="Notifikasi">
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-600 animate-ping" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-600" />
-            </button>
-
             {/* User Dropdown */}
             <div className="relative">
               <button
                 onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-accent transition-colors"
+                className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-accent transition-colors cursor-pointer"
               >
                 <UserAvatar src={user?.avatarUrl} name={user?.fullName} size="sm" />
                 <span className="hidden sm:inline text-xs font-semibold text-foreground">
@@ -231,7 +222,7 @@ export const DashboardLayout: React.FC = () => {
                 <div className="absolute right-0 mt-2 w-56 rounded-xl bg-card border border-border shadow-xl p-2 z-50 animate-in fade-in zoom-in-95">
                   <div className="px-3 py-2 border-b border-border mb-1">
                     <p className="text-xs font-bold text-foreground truncate">{user?.fullName}</p>
-                    <p className="text-[11px] text-muted-foreground truncate">{user?.email}</p>
+                    <p className="text-[11px] text-muted-foreground truncate">{ROLE_LABELS[role]}</p>
                   </div>
                   <Link
                     to="/dashboard/profile"

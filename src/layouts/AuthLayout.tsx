@@ -18,21 +18,20 @@ export const AuthLayout: React.FC = () => {
             </div>
             <div>
               <span className="font-display font-bold text-2xl tracking-tight text-white">EduVerse</span>
-              <span className="block text-xs font-semibold uppercase tracking-wider text-blue-400">Enterprise LMS</span>
             </div>
           </Link>
 
           <div className="mt-16 space-y-6 max-w-lg">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-xs font-medium text-blue-300">
-              <Sparkles className="w-3.5 h-3.5" /> Next-Generation Learning Ecosystem
+              <Sparkles className="w-3.5 h-3.5" /> Ruang Belajar &amp; Mengajar Digital
             </div>
 
             <h1 className="text-3xl md:text-5xl font-display font-extrabold text-white leading-tight tracking-tight">
-              Empowering Education Across Every Role.
+              Pembelajaran Terpadu untuk Guru &amp; Siswa.
             </h1>
 
             <p className="text-slate-400 text-base leading-relaxed">
-              Unified platform architecture connecting Super Admins, School Administrators, Teachers, Students, and Parents in a secure realtime environment.
+              Kelola kelas, materi pembelajaran, pengumpulan tugas, penilaian, dan presensi QR secara real-time dalam satu ruang kerja terintegrasi.
             </p>
           </div>
         </div>
@@ -44,8 +43,8 @@ export const AuthLayout: React.FC = () => {
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="text-sm font-semibold text-slate-200">Strict RBAC & RLS</h4>
-              <p className="text-xs text-slate-400">Multi-tenant data isolation</p>
+              <h4 className="text-sm font-semibold text-slate-200">Akses Aman &amp; Terjamin</h4>
+              <p className="text-xs text-slate-400">Data kelas &amp; nilai tersinkronisasi</p>
             </div>
           </div>
 
@@ -54,14 +53,14 @@ export const AuthLayout: React.FC = () => {
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="text-sm font-semibold text-slate-200">5 Distinct Roles</h4>
-              <p className="text-xs text-slate-400">Custom tailored experience</p>
+              <h4 className="text-sm font-semibold text-slate-200">Guru &amp; Siswa</h4>
+              <p className="text-xs text-slate-400">Materi, tugas &amp; presensi QR</p>
             </div>
           </div>
         </div>
 
         <div className="mt-8 text-xs text-slate-500">
-          © {new Date().getFullYear()} EduVerse Platform Inc. All rights reserved.
+          © {new Date().getFullYear()} EduVerse. Seluruh hak cipta dilindungi.
         </div>
       </div>
 

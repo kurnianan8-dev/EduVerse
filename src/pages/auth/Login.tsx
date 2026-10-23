@@ -7,7 +7,7 @@ import { useAuth, translateSupabaseAuthError } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { ROLE_LABELS } from '../../types/auth.types';
 import { getRoleBadgeStyle } from '../../lib/utils';
-import { LogIn, Shield, Loader2, Sparkles, AlertCircle, RefreshCw, MailCheck } from 'lucide-react';
+import { LogIn, Shield, Loader2, AlertCircle, RefreshCw, MailCheck } from 'lucide-react';
 
 const loginSchema = z.object({
   email: z.string().email('Silakan masukkan alamat email yang valid'),
@@ -137,9 +137,6 @@ export const Login: React.FC = () => {
       <div className="space-y-2">
         <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
           <span>Pilih Peran Akun</span>
-          <span className="text-[10px] text-blue-400 flex items-center gap-1 font-normal">
-            <Sparkles className="w-3 h-3" /> Akses Cepat
-          </span>
         </label>
         <div className="grid grid-cols-2 gap-3">
           {(['guru', 'siswa'] as const).map((r) => {
@@ -159,7 +156,7 @@ export const Login: React.FC = () => {
                 }`}
               >
                 <Shield className="w-4 h-4" />
-                <span>Login {labelText}</span>
+                <span>Masuk {labelText}</span>
               </button>
             );
           })}

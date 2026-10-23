@@ -45,7 +45,7 @@ export const translateSupabaseAuthError = (err: any): { message: string; code?: 
     code === 'email_exists'
   ) {
     return {
-      message: 'Email ini sudah terdaftar! Silakan langsung masuk (Login) menggunakan akun Anda.',
+      message: 'Email ini sudah terdaftar, silakan langsung Masuk',
       code: 'user_already_registered',
       isAlreadyRegistered: true,
     };
@@ -91,7 +91,7 @@ export const translateSupabaseAuthError = (err: any): { message: string; code?: 
   ) {
     return {
       message:
-        'Gagal terhubung ke server Supabase (Failed to fetch). Periksa koneksi internet Anda atau pastikan project Supabase dalam keadaan aktif.',
+        'Gagal terhubung ke server (Failed to fetch). Periksa koneksi internet Anda atau pastikan layanan dalam keadaan aktif.',
       code: 'network_error',
     };
   }
@@ -356,7 +356,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Detect obfuscated duplicate email
       if (authData?.user && Array.isArray(authData.user.identities) && authData.user.identities.length === 0) {
         const dupErr: any = new Error(
-          'Email ini sudah terdaftar! Silakan langsung masuk (Login) menggunakan akun Anda.'
+          'Email ini sudah terdaftar, silakan langsung Masuk'
         );
         dupErr.code = 'user_already_registered';
         dupErr.isAlreadyRegistered = true;

@@ -77,7 +77,7 @@ export const StudentRegister: React.FC = () => {
       const translated = translateSupabaseAuthError(err);
       if (translated.isAlreadyRegistered || err?.isAlreadyRegistered) {
         setIsAlreadyRegisteredError(true);
-        setRegisterError('Email ini sudah terdaftar! Silakan langsung masuk (Login) menggunakan akun Anda.');
+        setRegisterError('Email ini sudah terdaftar, silakan langsung Masuk');
       } else {
         setRegisterError(translated.message);
       }

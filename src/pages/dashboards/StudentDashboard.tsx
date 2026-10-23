@@ -1224,7 +1224,7 @@ export const StudentDashboard: React.FC = () => {
             Selamat Datang, {resolvedStudentName}
           </h1>
           <p className="text-xs text-slate-300">
-            Jurusan / Kelas: <strong className="text-blue-300">{studentJurusan}</strong> • Institusi: <strong className="text-blue-300">{user?.schoolName || 'SMK EduVerse'}</strong>
+            Jurusan / Kelas: <strong className="text-blue-300">{studentJurusan}</strong>
           </p>
         </div>
 
@@ -1391,22 +1391,6 @@ export const StudentDashboard: React.FC = () => {
                   });
                   return (
                     <div className="space-y-4">
-                      {/* FORENSIC MARKER BANNER */}
-                      <div className={`p-4 rounded-2xl border text-xs font-mono font-bold flex flex-col gap-1 ${
-                        classAssignments.length === 0
-                          ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
-                          : 'bg-blue-500/10 text-blue-600 border-blue-500/30'
-                      }`}>
-                        <div>
-                          {classAssignments.length === 0
-                            ? 'FORENSIC STATE: EMPTY — BUILD 24839a9'
-                            : 'FORENSIC STATE: HAS DATA — BUILD 24839a9'}
-                        </div>
-                        <div className="text-[11px] font-normal">
-                          selectedClass.id: <strong className="font-mono">{selectedClass?.id || 'null'}</strong> | assignments.length: <strong className="font-mono">{assignments.length}</strong> | classAssignments.length: <strong className="font-mono">{classAssignments.length}</strong>
-                        </div>
-                      </div>
-
                       {classAssignments.length === 0 ? (
                         <div className="p-8 text-center bg-card border border-border rounded-2xl text-muted-foreground italic text-xs">
                           Belum ada tugas diberikan oleh Guru untuk kelas ini.
@@ -1430,7 +1414,7 @@ export const StudentDashboard: React.FC = () => {
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs text-muted-foreground border-t border-border pt-3 gap-2">
                               <div className="space-y-0.5">
                                 <div>Guru Pengampu: <strong className="text-foreground">{selectedClass.teacherName}</strong></div>
-                                <div>Deadline: <strong className="text-amber-600">{a.dueDate}</strong> • Nilai Maksimal: <strong>{a.maxScore || 100} Poin</strong></div>
+                                <div>Tenggat Waktu: <strong className="text-amber-600">{a.dueDate}</strong> • Nilai Maksimal: <strong>{a.maxScore || 100} Poin</strong></div>
                               </div>
                               {a.grade !== undefined && (
                                 <span className="font-bold text-emerald-600">Nilai: {a.grade} / {a.maxScore || 100}</span>
@@ -1439,7 +1423,7 @@ export const StudentDashboard: React.FC = () => {
                                 onClick={() => setSelectedAssignment(a)}
                                 className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer hover:bg-blue-700 transition-all shadow self-start sm:self-auto"
                               >
-                                {a.status === 'Sudah Dikumpulkan' ? 'Lihat / Edit Jawaban' : 'Kerjakan / Kumpulkan'}
+                                {a.status === 'Sudah Dikumpulkan' ? 'Lihat / Ubah Jawaban' : 'Kerjakan / Kumpulkan'}
                               </button>
                             </div>
                           </div>
@@ -1570,7 +1554,7 @@ export const StudentDashboard: React.FC = () => {
                       <th className="p-3">Judul Tugas</th>
                       <th className="p-3">Status Pengumpulan</th>
                       <th className="p-3">Nilai Siswa</th>
-                      <th className="p-3">Catatan / Feedback Guru</th>
+                      <th className="p-3">Catatan / Umpan Balik Guru</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -2265,7 +2249,7 @@ export const StudentDashboard: React.FC = () => {
                   disabled={isSubmittingJoin}
                   className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  {isSubmittingJoin ? 'Mengunggah...' : selectedAssignment.status === 'Sudah Dikumpulkan' ? 'Update Jawaban' : 'Kumpulkan Tugas'}
+                  {isSubmittingJoin ? 'Mengunggah...' : selectedAssignment.status === 'Sudah Dikumpulkan' ? 'Perbarui Jawaban' : 'Kumpulkan Tugas'}
                 </button>
               </div>
             </form>

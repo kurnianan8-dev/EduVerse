@@ -8,7 +8,6 @@ import {
   Mail,
   Shield,
   Building,
-  Calendar,
   Camera,
   Upload,
   Trash2,
@@ -398,14 +397,7 @@ export const Profile: React.FC = () => {
             <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1">
               <Building className="w-4 h-4 text-sky-600" /> Jurusan / Bidang
             </div>
-            <p className="text-sm font-semibold text-foreground">{user?.jurusan || 'Teknik / Umum'}</p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1">
-              <Calendar className="w-4 h-4 text-emerald-600" /> Bergabung Sejak
-            </div>
-            <p className="text-sm font-semibold text-foreground">Agustus 2026</p>
+            <p className="text-sm font-semibold text-foreground">{user?.jurusan || ROLE_LABELS[role]}</p>
           </div>
         </div>
       </div>
