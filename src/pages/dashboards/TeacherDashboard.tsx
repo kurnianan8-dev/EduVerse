@@ -671,22 +671,195 @@ export const TeacherDashboard: React.FC = () => {
   const allProfilesCacheRef = useRef<Record<string, any>>({});
   const studentEnrolledClassCacheRef = useRef<Record<string, any>>({});
 
-  const [sessionResetTimestamps, setSessionResetTimestamps] = useState<Record<string, number>>(() => {
+  const isValidUUID = (val: any): boolean =>
+    typeof val === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
+
+  const getAttendanceStorageKeys = (teacherId?: string) => {
+    const cleanId = (teacherId || user?.id || '').trim();
+    return {
+      recordsKey: cleanId ? `eduverse_active_attendance_${cleanId}` : 'eduverse_active_attendance_latest',
+      sessionKey: cleanId ? `eduverse_active_session_${cleanId}` : 'eduverse_active_session_latest',
+      fallbackRecordsKey: 'eduverse_active_attendance_latest',
+      fallbackSessionKey: 'eduverse_active_session_latest',
+    };
+  };
+
+  const loadSavedResetTimestamps = (teacherId?: string): Record<string, number> => {
     try {
-      const saved = localStorage.getItem('eduverse_attendance_session_reset_v1');
-      return saved ? JSON.parse(saved) : {};
+      const { sessionKey, fallbackSessionKey } = getAttendanceStorageKeys(teacherId);
+      const rawSession = localStorage.getItem(sessionKey) || localStorage.getItem(fallbackSessionKey);
+      const parsedSession = rawSession ? JSON.parse(rawSession) : null;
+      const rawLegacy = localStorage.getItem('eduverse_attendance_session_reset_v1');
+      const parsedLegacy = rawLegacy ? JSON.parse(rawLegacy) : {};
+      return {
+        ...(parsedLegacy && typeof parsedLegacy === 'object' ? parsedLegacy : {}),
+        ...(parsedSession?.resetTimestamps && typeof parsedSession.resetTimestamps === 'object'
+          ? parsedSession.resetTimestamps
+          : {}),
+      };
     } catch {
       return {};
     }
-  });
+  };
 
-  // Main Data States (Fetched directly from Supabase DB)
+  const loadSavedAttendanceFromStorage = (
+    teacherId?: string,
+    resetMapOverride?: Record<string, number>
+  ): AttendanceRecord[] => {
+    try {
+      const todayStr = getLocalDateYYYYMMDD(new Date());
+      const resetMap = resetMapOverride || loadSavedResetTimestamps(teacherId);
+      const { recordsKey, fallbackRecordsKey } = getAttendanceStorageKeys(teacherId);
+
+      const rawPrimary = localStorage.getItem(recordsKey);
+      const rawFallback = localStorage.getItem(fallbackRecordsKey);
+      const parsedPrimary: AttendanceRecord[] = rawPrimary ? JSON.parse(rawPrimary) : [];
+      const parsedFallback: AttendanceRecord[] = rawFallback ? JSON.parse(rawFallback) : [];
+
+      const combined = Array.isArray(parsedPrimary) && parsedPrimary.length > 0
+        ? parsedPrimary
+        : Array.isArray(parsedFallback)
+          ? parsedFallback
+          : [];
+
+      return combined.filter((r) => {
+        if (!r || r.scannedDate !== todayStr) return false;
+        const classResetTs = r.classId ? resetMap[r.classId] || 0 : 0;
+        const globalResetTs = resetMap['global'] || 0;
+        const effectiveResetTs = Math.max(classResetTs, globalResetTs);
+        return (r.rawTimestamp || 0) > effectiveResetTs;
+      });
+    } catch {
+      return [];
+    }
+  };
+
+  const saveAttendanceToStorage = (
+    records: AttendanceRecord[],
+    teacherId?: string,
+    resetMapOverride?: Record<string, number>
+  ) => {
+    try {
+      const todayStr = getLocalDateYYYYMMDD(new Date());
+      const resetMap = resetMapOverride || sessionResetTimestamps;
+      const { recordsKey, sessionKey, fallbackRecordsKey, fallbackSessionKey } =
+        getAttendanceStorageKeys(teacherId);
+
+      const validTodayRecords = records.filter((r) => {
+        if (!r || r.scannedDate !== todayStr) return false;
+        const classResetTs = r.classId ? resetMap[r.classId] || 0 : 0;
+        const globalResetTs = resetMap['global'] || 0;
+        const effectiveResetTs = Math.max(classResetTs, globalResetTs);
+        return (r.rawTimestamp || 0) > effectiveResetTs;
+      });
+
+      const serializedRecords = JSON.stringify(validTodayRecords);
+      localStorage.setItem(recordsKey, serializedRecords);
+      localStorage.setItem(fallbackRecordsKey, serializedRecords);
+
+      const sessionPayload = JSON.stringify({
+        teacherId: teacherId || user?.id || '',
+        date: todayStr,
+        attendanceMode,
+        resetTimestamps: resetMap,
+        recordCount: validTodayRecords.length,
+        updatedAt: Date.now(),
+      });
+      localStorage.setItem(sessionKey, sessionPayload);
+      localStorage.setItem(fallbackSessionKey, sessionPayload);
+      localStorage.setItem('eduverse_attendance_session_reset_v1', JSON.stringify(resetMap));
+    } catch {
+      // ignore storage quota errors
+    }
+  };
+
+  const mergeAttendanceRecordsUnique = (
+    localRecords: AttendanceRecord[],
+    dbRecords: AttendanceRecord[],
+    resetMapOverride?: Record<string, number>
+  ): AttendanceRecord[] => {
+    const todayStr = getLocalDateYYYYMMDD(new Date());
+    const resetMap = resetMapOverride || sessionResetTimestamps;
+    const mergedMap = new Map<string, AttendanceRecord>();
+
+    const getRecordIdentityKey = (r: AttendanceRecord): string => {
+      const clsKey = (r.classId || 'global').trim().toLowerCase();
+      const cleanStudentId = (r.studentId || '').trim().toLowerCase();
+      const cleanName = (r.studentName || '').trim().toLowerCase();
+      const cleanQr = (r.qrCode || '').trim().toLowerCase();
+
+      if (cleanStudentId && cleanStudentId !== 'null' && cleanStudentId !== 'undefined') {
+        return `sid:${cleanStudentId.slice(0, 8)}|cls:${clsKey}`;
+      }
+      if (cleanQr && cleanQr !== '-') {
+        return `qr:${cleanQr}|cls:${clsKey}`;
+      }
+      return `name:${cleanName}|cls:${clsKey}`;
+    };
+
+    // Process localRecords first, then dbRecords, merging richest fields
+    const allCandidates = [...localRecords, ...dbRecords];
+    for (const rec of allCandidates) {
+      if (!rec || rec.scannedDate !== todayStr) continue;
+      const classResetTs = rec.classId ? resetMap[rec.classId] || 0 : 0;
+      const globalResetTs = resetMap['global'] || 0;
+      const effectiveResetTs = Math.max(classResetTs, globalResetTs);
+      if ((rec.rawTimestamp || 0) <= effectiveResetTs) continue;
+
+      const key = getRecordIdentityKey(rec);
+      const existing = mergedMap.get(key);
+      if (!existing) {
+        mergedMap.set(key, rec);
+      } else {
+        const preferNewName =
+          !isPlaceholderStudentName(rec.studentName) && isPlaceholderStudentName(existing.studentName);
+        const preferNewMajor =
+          !isGenericMajorLabel(rec.jurusan) && isGenericMajorLabel(existing.jurusan);
+
+        mergedMap.set(key, {
+          ...existing,
+          ...rec,
+          id: isValidUUID(rec.id) ? rec.id : existing.id,
+          classId: rec.classId || existing.classId,
+          studentId: isValidUUID(rec.studentId) ? rec.studentId : existing.studentId || rec.studentId,
+          studentName: preferNewName
+            ? rec.studentName
+            : !isPlaceholderStudentName(existing.studentName)
+              ? existing.studentName
+              : rec.studentName,
+          jurusan: preferNewMajor
+            ? rec.jurusan
+            : !isGenericMajorLabel(existing.jurusan)
+              ? existing.jurusan
+              : rec.jurusan,
+          avatarUrl: rec.avatarUrl || existing.avatarUrl,
+          qrCode:
+            existing.qrCode && existing.qrCode !== '-'
+              ? existing.qrCode
+              : rec.qrCode || existing.qrCode,
+          scannedAt: rec.scannedAt || existing.scannedAt,
+          rawTimestamp: Math.max(existing.rawTimestamp || 0, rec.rawTimestamp || 0),
+        });
+      }
+    }
+
+    return Array.from(mergedMap.values()).sort((a, b) => (b.rawTimestamp || 0) - (a.rawTimestamp || 0));
+  };
+
+  const [sessionResetTimestamps, setSessionResetTimestamps] = useState<Record<string, number>>(() =>
+    loadSavedResetTimestamps(user?.id)
+  );
+
+  // Main Data States (Fetched directly from Supabase DB + LocalStorage Backup for Attendance)
   const [courses, setCourses] = useState<CourseModule[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [assignments, setAssignments] = useState<AssignmentItem[]>([]);
   const [submissions, setSubmissions] = useState<SubmissionItem[]>([]);
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() =>
+    loadSavedAttendanceFromStorage(user?.id)
+  );
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [enrolledStudents, setEnrolledStudents] = useState<EnrolledStudent[]>([]);
 
@@ -766,8 +939,20 @@ export const TeacherDashboard: React.FC = () => {
     maxScore: 100,
   });
 
-  // Fetch real data from Supabase DB on mount + Realtime listener for attendance_records
+  // Restore local attendance immediately when user.id becomes available & fetch real data from Supabase DB
   useEffect(() => {
+    const restoredReset = loadSavedResetTimestamps(user?.id);
+    setSessionResetTimestamps(restoredReset);
+
+    const restoredLocal = loadSavedAttendanceFromStorage(user?.id, restoredReset);
+    if (restoredLocal.length > 0) {
+      setAttendanceRecords((prev) => {
+        const merged = mergeAttendanceRecordsUnique(restoredLocal, prev, restoredReset);
+        saveAttendanceToStorage(merged, user?.id, restoredReset);
+        return merged;
+      });
+    }
+
     fetchSupabaseData();
 
     const attendanceChannel = supabase
@@ -1013,11 +1198,17 @@ export const TeacherDashboard: React.FC = () => {
       }
       studentEnrolledClassCacheRef.current = studentEnrolledClassMap;
 
-      // 5. Attendance Records with Full Student Name & Major/Class Resolution (Filtered strictly for Today's Date)
+      // 5. Attendance Records Double Persistence: Restore LocalStorage + Merge with Supabase DB (Filtered for Today's Date)
+      const todayStr = getLocalDateYYYYMMDD(new Date());
+      const savedResetMap = loadSavedResetTimestamps(activeTeacherId);
+      const localStoredRecords = loadSavedAttendanceFromStorage(activeTeacherId, savedResetMap);
+
       const { data: attData } = await supabase
         .from('attendance_records')
         .select('*')
         .order('scanned_at', { ascending: false });
+
+      let mappedTodayRecords: AttendanceRecord[] = [];
 
       if (attData && attData.length > 0) {
         const missingIds = attData
@@ -1035,16 +1226,8 @@ export const TeacherDashboard: React.FC = () => {
         allProfilesCacheRef.current = profilesMap;
 
         const allProfilesList = Object.values(profilesMap);
-        const todayStr = getLocalDateYYYYMMDD(new Date());
-        let savedResetMap: Record<string, number> = {};
-        try {
-          const rawSaved = localStorage.getItem('eduverse_attendance_session_reset_v1');
-          if (rawSaved) savedResetMap = JSON.parse(rawSaved);
-        } catch {
-          // ignore
-        }
 
-        const mappedTodayRecords: AttendanceRecord[] = attData
+        mappedTodayRecords = attData
           .map((a: any) => {
             let qrParsed: Record<string, any> | null = null;
             if (a.qr_code && typeof a.qr_code === 'string' && a.qr_code.trim().startsWith('{')) {
@@ -1058,7 +1241,7 @@ export const TeacherDashboard: React.FC = () => {
             const rawStudentId = String(a.student_id || qrParsed?.sid || qrParsed?.student_id || '').trim();
             const shortIdPrefix = rawStudentId.replace(/^EDU-SISWA-/i, '').trim().toLowerCase();
 
-            // Lookup profile by exact ID, or 8-char UUID prefix, or qr_code
+            // Lookup profile by exact ID, or 8-char UUID prefix, or qr_code, or matching full_name
             let prof = rawStudentId ? profilesMap[rawStudentId] : undefined;
             if (!prof && shortIdPrefix.length >= 6) {
               prof = allProfilesList.find(
@@ -1068,13 +1251,21 @@ export const TeacherDashboard: React.FC = () => {
                   (qrParsed?.email && String(p.email || '').toLowerCase() === String(qrParsed.email).toLowerCase())
               );
             }
+            if (!prof && a.student_name && !isPlaceholderStudentName(a.student_name)) {
+              prof = allProfilesList.find(
+                (p: any) =>
+                  String(p.full_name || p.name || '').trim().toLowerCase() ===
+                  String(a.student_name).trim().toLowerCase()
+              );
+            }
 
             // Lookup in enrolledStudents state
             const enrolledSt = enrolledStudents.find(
               (st) =>
                 st.id === rawStudentId ||
                 (shortIdPrefix.length >= 6 && st.id.toLowerCase().startsWith(shortIdPrefix)) ||
-                (prof?.id && st.id === prof.id)
+                (prof?.id && st.id === prof.id) ||
+                (a.student_name && st.fullName.trim().toLowerCase() === String(a.student_name).trim().toLowerCase())
             );
 
             // Lookup class object from attendance row class_id, QR classId, or student's enrollment
@@ -1138,11 +1329,15 @@ export const TeacherDashboard: React.FC = () => {
             const effectiveResetTs = Math.max(classResetTs, globalResetTs);
             return rec.rawTimestamp > effectiveResetTs;
           });
-
-        setAttendanceRecords(mappedTodayRecords);
-      } else {
-        setAttendanceRecords([]);
       }
+
+      // Merge localStorage backup + current UI state + Supabase records without duplicates
+      setAttendanceRecords((prev) => {
+        const combinedLocal = mergeAttendanceRecordsUnique(localStoredRecords, prev, savedResetMap);
+        const finalMerged = mergeAttendanceRecordsUnique(combinedLocal, mappedTodayRecords, savedResetMap);
+        saveAttendanceToStorage(finalMerged, activeTeacherId, savedResetMap);
+        return finalMerged;
+      });
     } catch (err) {
       console.warn('Error fetching Supabase data:', err);
     }
@@ -1216,9 +1411,9 @@ export const TeacherDashboard: React.FC = () => {
         });
         setEnrolledStudents(mappedEnrolled);
 
-        // Also enrich any existing attendanceRecords in state with the resolved student names & majors
-        setAttendanceRecords((prev) =>
-          prev.map((rec) => {
+        // Also enrich any existing attendanceRecords in state & localStorage with the resolved student names & majors
+        setAttendanceRecords((prev) => {
+          const enriched = prev.map((rec) => {
             const matchedSt = mappedEnrolled.find(
               (st) =>
                 st.id === rec.studentId ||
@@ -1236,8 +1431,10 @@ export const TeacherDashboard: React.FC = () => {
                 : rec.jurusan,
               avatarUrl: rec.avatarUrl || prof?.avatar_url || matchedSt?.avatarUrl,
             };
-          })
-        );
+          });
+          saveAttendanceToStorage(enriched, user?.id);
+          return enriched;
+        });
       } else {
         setEnrolledStudents([]);
       }
@@ -1641,17 +1838,23 @@ export const TeacherDashboard: React.FC = () => {
         rawTimestamp: now.getTime(),
       };
 
-      setAttendanceRecords((prev) => [
-        newRecord,
-        ...prev.filter(
-          (r) =>
-            r.scannedDate === todayDateStr &&
-            !(
-              (r.studentId === newRecord.studentId || r.qrCode === newRecord.qrCode) &&
-              (r.classId || '') === (newRecord.classId || '')
-            )
-        ),
-      ]);
+      setAttendanceRecords((prev) => {
+        const nextRecords = [
+          newRecord,
+          ...prev.filter(
+            (r) =>
+              r.scannedDate === todayDateStr &&
+              !(
+                (r.studentId === newRecord.studentId ||
+                  r.qrCode === newRecord.qrCode ||
+                  r.studentName.trim().toLowerCase() === newRecord.studentName.trim().toLowerCase()) &&
+                (r.classId || '') === (newRecord.classId || '')
+              )
+          ),
+        ];
+        saveAttendanceToStorage(nextRecords, user?.id);
+        return nextRecords;
+      });
 
       setScanFeedback({
         type: 'success',
@@ -1659,11 +1862,11 @@ export const TeacherDashboard: React.FC = () => {
       });
       setTimeout(() => setScanFeedback(null), 3500);
 
-      // 6. Save to Supabase attendance_records in the background (including student_name & student_major)
+      // 6. Save to Supabase attendance_records in the background (with resilient multi-strategy fallback)
       (async () => {
         try {
           // Also sync student profile in public.profiles if name or major was missing
-          if (effectiveStudentId && String(effectiveStudentId).length >= 32) {
+          if (effectiveStudentId && isValidUUID(effectiveStudentId)) {
             (supabase as any)
               .from('profiles')
               .update({
@@ -1677,44 +1880,83 @@ export const TeacherDashboard: React.FC = () => {
           }
 
           const statusVal = attendanceMode === 'pulang' ? 'pulang' : 'hadir';
+          const safeStudentUuid = isValidUUID(effectiveStudentId) ? effectiveStudentId : null;
+          const safeClassUuid = isValidUUID(effectiveClassId) ? effectiveClassId : null;
 
-          // Strategy 1: Standard attendance_records payload with student_name & student_major
-          const { error: err1 } = await (supabase as any).from('attendance_records').insert({
-            student_id: effectiveStudentId,
-            class_id: effectiveClassId,
-            student_name: resolvedStudentName,
-            student_major: resolvedStudentMajor,
-            qr_code: resolvedQrCode,
-            status: statusVal,
-            scanned_at: nowIso,
-          });
+          let insertedRow: any = null;
 
-          if (err1) {
-            // Strategy 2: Extended payload with session / profile_id columns + student_name & student_major
-            const { error: err2 } = await (supabase as any).from('attendance_records').insert({
-              student_id: effectiveStudentId,
-              profile_id: effectiveStudentId,
-              class_id: effectiveClassId,
+          // Strategy 1: Live Supabase attendance_records schema (student_id, class_id, student_name, student_major, status, scanned_at)
+          const { data: data1, error: err1 } = await (supabase as any)
+            .from('attendance_records')
+            .insert({
+              student_id: safeStudentUuid,
+              class_id: safeClassUuid,
               student_name: resolvedStudentName,
               student_major: resolvedStudentMajor,
-              qr_code: resolvedQrCode,
-              attendance_type: 'qr',
-              session: attendanceMode,
-              session_id: `${attendanceMode}_${todayDateStr}`,
               status: statusVal,
               scanned_at: nowIso,
-            });
+            })
+            .select();
 
-            if (err2) {
-              // Strategy 3: Fallback if student_name / student_major columns are not added yet
-              await (supabase as any).from('attendance_records').insert({
-                student_id: effectiveStudentId,
-                class_id: effectiveClassId,
-                qr_code: resolvedQrCode,
+          if (!err1 && data1?.[0]) {
+            insertedRow = data1[0];
+          } else {
+            // Strategy 2: Fallback without class_id FK if class_id constraint failed
+            const { data: data2, error: err2 } = await (supabase as any)
+              .from('attendance_records')
+              .insert({
+                student_id: safeStudentUuid,
+                student_name: resolvedStudentName,
+                student_major: resolvedStudentMajor,
                 status: statusVal,
                 scanned_at: nowIso,
-              });
+              })
+              .select();
+
+            if (!err2 && data2?.[0]) {
+              insertedRow = data2[0];
+            } else {
+              // Strategy 3: Fallback with null FKs so student_name & student_major are always persisted even if student_id FK fails
+              const { data: data3, error: err3 } = await (supabase as any)
+                .from('attendance_records')
+                .insert({
+                  student_id: null,
+                  class_id: null,
+                  student_name: resolvedStudentName,
+                  student_major: resolvedStudentMajor,
+                  status: statusVal,
+                  scanned_at: nowIso,
+                })
+                .select();
+
+              if (!err3 && data3?.[0]) {
+                insertedRow = data3[0];
+              } else {
+                // Strategy 4: Minimal core columns (student_id, class_id, status, scanned_at)
+                const { data: data4 } = await (supabase as any)
+                  .from('attendance_records')
+                  .insert({
+                    student_id: safeStudentUuid,
+                    class_id: safeClassUuid,
+                    status: statusVal,
+                    scanned_at: nowIso,
+                  })
+                  .select();
+                if (data4?.[0]) {
+                  insertedRow = data4[0];
+                }
+              }
             }
+          }
+
+          if (insertedRow?.id) {
+            setAttendanceRecords((prev) => {
+              const updated = prev.map((r) =>
+                r.id === newRecord.id ? { ...r, id: insertedRow.id } : r
+              );
+              saveAttendanceToStorage(updated, user?.id);
+              return updated;
+            });
           }
         } catch (bgErr: any) {
           console.warn('Attendance DB background save notice:', bgErr?.message);
@@ -2599,8 +2841,26 @@ export const TeacherDashboard: React.FC = () => {
     return r.rawTimestamp > effectiveResetTs;
   });
 
-  // Reset / Restart Active Attendance Session (Auto after Export or Manual Button)
+  // Reset / Restart Active Attendance Session (Only when explicitly confirmed by Teacher)
   const handleResetAttendanceSession = (targetClassId?: string, isAutoAfterExport = false) => {
+    if (isAutoAfterExport) {
+      const shouldReset = window.confirm(
+        'Laporan absensi berhasil diunduh.\n\nApakah Anda ingin me-reset (mengosongkan) tabel daftar kehadiran sekarang untuk sesi berikutnya?\n\n(Pilih "OK" untuk mengosongkan tabel, atau "Batal" jika masih ingin menyimpan daftar ini di layar)'
+      );
+      if (!shouldReset) {
+        setAttendanceNotice(
+          '✅ Laporan berhasil diunduh. Daftar kehadiran tetap tersimpan di layar dan akan bertahan meskipun halaman di-refresh.'
+        );
+        setTimeout(() => setAttendanceNotice(null), 5000);
+        return;
+      }
+    } else {
+      const confirmManual = window.confirm(
+        'Apakah Anda yakin ingin menyelesaikan sesi ini dan mengosongkan (Reset) daftar absensi di layar?'
+      );
+      if (!confirmManual) return;
+    }
+
     const resetTs = Date.now();
     const key = targetClassId || 'global';
     const nextMap: Record<string, number> = {
@@ -2608,18 +2868,28 @@ export const TeacherDashboard: React.FC = () => {
       [key]: resetTs,
     };
 
-    setSessionResetTimestamps(nextMap);
-    try {
-      localStorage.setItem('eduverse_attendance_session_reset_v1', JSON.stringify(nextMap));
-    } catch {
-      // ignore storage errors
-    }
+    const recordsToDeleteIds = attendanceRecords
+      .filter((r) => (!targetClassId || r.classId === targetClassId || !r.classId) && isValidUUID(r.id))
+      .map((r) => r.id);
 
-    // Clear active attendance records from UI state for the target class (or all if global)
-    if (targetClassId) {
-      setAttendanceRecords((prev) => prev.filter((r) => r.classId && r.classId !== targetClassId));
-    } else {
-      setAttendanceRecords([]);
+    setSessionResetTimestamps(nextMap);
+
+    // Clear active attendance records from UI state & localStorage for the target class (or all if global)
+    setAttendanceRecords((prev) => {
+      const remaining = targetClassId
+        ? prev.filter((r) => r.classId && r.classId !== targetClassId)
+        : [];
+      saveAttendanceToStorage(remaining, user?.id, nextMap);
+      return remaining;
+    });
+
+    // Also remove reset rows from Supabase attendance_records in background so they don't reappear on future devices
+    if (recordsToDeleteIds.length > 0) {
+      (supabase as any)
+        .from('attendance_records')
+        .delete()
+        .in('id', recordsToDeleteIds)
+        .then(() => {});
     }
 
     // Reset scanner memory so students can be scanned cleanly in the next session
@@ -2627,7 +2897,7 @@ export const TeacherDashboard: React.FC = () => {
     lastScannedTimeRef.current = 0;
 
     const msg = isAutoAfterExport
-      ? '✅ Rekap berhasil diunduh & Sesi Absensi otomatis di-reset (kosong) untuk pertemuan berikutnya.'
+      ? '✅ Rekap berhasil diunduh & Sesi Absensi telah di-reset (kosong) untuk pertemuan berikutnya.'
       : '🔄 Sesi Absensi berhasil diselesaikan & di-reset. Daftar presensi kini kosong dan siap untuk sesi baru.';
     setAttendanceNotice(msg);
     setTimeout(() => setAttendanceNotice(null), 5000);
