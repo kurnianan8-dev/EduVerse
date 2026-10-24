@@ -106,6 +106,7 @@ interface SubmissionItem {
 
 interface AttendanceRecord {
   id: string;
+  teacherId?: string;
   classId?: string;
   studentId?: string;
   studentName: string;
@@ -675,29 +676,73 @@ export const TeacherDashboard: React.FC = () => {
     typeof val === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
 
+  const resolveCurrentTeacherId = (explicitId?: string): string => {
+    const direct = (explicitId || user?.id || '').trim();
+    if (direct) return direct;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('sb-') && k.endsWith('-auth-token')) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const uid = parsed?.user?.id || parsed?.currentSession?.user?.id;
+            if (uid && typeof uid === 'string') return uid.trim();
+          }
+        }
+      }
+    } catch {
+      // ignore localStorage read errors
+    }
+    return '';
+  };
+
   const getAttendanceStorageKeys = (teacherId?: string) => {
-    const cleanId = (teacherId || user?.id || '').trim();
+    const cleanId = resolveCurrentTeacherId(teacherId);
     return {
-      recordsKey: cleanId ? `eduverse_active_attendance_${cleanId}` : 'eduverse_active_attendance_latest',
-      sessionKey: cleanId ? `eduverse_active_session_${cleanId}` : 'eduverse_active_session_latest',
-      fallbackRecordsKey: 'eduverse_active_attendance_latest',
-      fallbackSessionKey: 'eduverse_active_session_latest',
+      cleanId,
+      classesKey: cleanId ? `eduverse_classes_${cleanId}` : '',
+      recordsKey: cleanId ? `eduverse_active_attendance_${cleanId}` : '',
+      sessionKey: cleanId ? `eduverse_active_session_${cleanId}` : '',
     };
+  };
+
+  const loadSavedClassesFromStorage = (teacherId?: string): ClassItem[] => {
+    try {
+      const { cleanId, classesKey } = getAttendanceStorageKeys(teacherId);
+      if (!cleanId || !classesKey) return [];
+      const raw = localStorage.getItem(classesKey);
+      const parsed: ClassItem[] = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((c) => c && (!c.teacherId || c.teacherId === cleanId));
+    } catch {
+      return [];
+    }
+  };
+
+  const saveClassesToStorage = (classList: ClassItem[], teacherId?: string) => {
+    try {
+      const { cleanId, classesKey } = getAttendanceStorageKeys(teacherId);
+      if (!cleanId || !classesKey) return;
+      const isolated = classList.filter((c) => c && (!c.teacherId || c.teacherId === cleanId));
+      localStorage.setItem(classesKey, JSON.stringify(isolated));
+    } catch {
+      // ignore storage quota errors
+    }
   };
 
   const loadSavedResetTimestamps = (teacherId?: string): Record<string, number> => {
     try {
-      const { sessionKey, fallbackSessionKey } = getAttendanceStorageKeys(teacherId);
-      const rawSession = localStorage.getItem(sessionKey) || localStorage.getItem(fallbackSessionKey);
+      const { cleanId, sessionKey } = getAttendanceStorageKeys(teacherId);
+      if (!cleanId || !sessionKey) return {};
+      const rawSession = localStorage.getItem(sessionKey);
       const parsedSession = rawSession ? JSON.parse(rawSession) : null;
-      const rawLegacy = localStorage.getItem('eduverse_attendance_session_reset_v1');
-      const parsedLegacy = rawLegacy ? JSON.parse(rawLegacy) : {};
-      return {
-        ...(parsedLegacy && typeof parsedLegacy === 'object' ? parsedLegacy : {}),
-        ...(parsedSession?.resetTimestamps && typeof parsedSession.resetTimestamps === 'object'
-          ? parsedSession.resetTimestamps
-          : {}),
-      };
+      if (parsedSession?.teacherId && parsedSession.teacherId !== cleanId) {
+        return {};
+      }
+      return parsedSession?.resetTimestamps && typeof parsedSession.resetTimestamps === 'object'
+        ? parsedSession.resetTimestamps
+        : {};
     } catch {
       return {};
     }
@@ -709,22 +754,17 @@ export const TeacherDashboard: React.FC = () => {
   ): AttendanceRecord[] => {
     try {
       const todayStr = getLocalDateYYYYMMDD(new Date());
-      const resetMap = resetMapOverride || loadSavedResetTimestamps(teacherId);
-      const { recordsKey, fallbackRecordsKey } = getAttendanceStorageKeys(teacherId);
+      const { cleanId, recordsKey } = getAttendanceStorageKeys(teacherId);
+      if (!cleanId || !recordsKey) return [];
+      const resetMap = resetMapOverride || loadSavedResetTimestamps(cleanId);
 
       const rawPrimary = localStorage.getItem(recordsKey);
-      const rawFallback = localStorage.getItem(fallbackRecordsKey);
       const parsedPrimary: AttendanceRecord[] = rawPrimary ? JSON.parse(rawPrimary) : [];
-      const parsedFallback: AttendanceRecord[] = rawFallback ? JSON.parse(rawFallback) : [];
+      if (!Array.isArray(parsedPrimary)) return [];
 
-      const combined = Array.isArray(parsedPrimary) && parsedPrimary.length > 0
-        ? parsedPrimary
-        : Array.isArray(parsedFallback)
-          ? parsedFallback
-          : [];
-
-      return combined.filter((r) => {
+      return parsedPrimary.filter((r) => {
         if (!r || r.scannedDate !== todayStr) return false;
+        if (r.teacherId && r.teacherId !== cleanId) return false;
         const classResetTs = r.classId ? resetMap[r.classId] || 0 : 0;
         const globalResetTs = resetMap['global'] || 0;
         const effectiveResetTs = Math.max(classResetTs, globalResetTs);
@@ -742,24 +782,28 @@ export const TeacherDashboard: React.FC = () => {
   ) => {
     try {
       const todayStr = getLocalDateYYYYMMDD(new Date());
+      const { cleanId, recordsKey, sessionKey } = getAttendanceStorageKeys(teacherId);
+      if (!cleanId || !recordsKey || !sessionKey) return;
       const resetMap = resetMapOverride || sessionResetTimestamps;
-      const { recordsKey, sessionKey, fallbackRecordsKey, fallbackSessionKey } =
-        getAttendanceStorageKeys(teacherId);
 
-      const validTodayRecords = records.filter((r) => {
-        if (!r || r.scannedDate !== todayStr) return false;
-        const classResetTs = r.classId ? resetMap[r.classId] || 0 : 0;
-        const globalResetTs = resetMap['global'] || 0;
-        const effectiveResetTs = Math.max(classResetTs, globalResetTs);
-        return (r.rawTimestamp || 0) > effectiveResetTs;
-      });
+      const validTodayRecords = records
+        .filter((r) => {
+          if (!r || r.scannedDate !== todayStr) return false;
+          if (r.teacherId && r.teacherId !== cleanId) return false;
+          const classResetTs = r.classId ? resetMap[r.classId] || 0 : 0;
+          const globalResetTs = resetMap['global'] || 0;
+          const effectiveResetTs = Math.max(classResetTs, globalResetTs);
+          return (r.rawTimestamp || 0) > effectiveResetTs;
+        })
+        .map((r) => ({
+          ...r,
+          teacherId: cleanId,
+        }));
 
-      const serializedRecords = JSON.stringify(validTodayRecords);
-      localStorage.setItem(recordsKey, serializedRecords);
-      localStorage.setItem(fallbackRecordsKey, serializedRecords);
+      localStorage.setItem(recordsKey, JSON.stringify(validTodayRecords));
 
       const sessionPayload = JSON.stringify({
-        teacherId: teacherId || user?.id || '',
+        teacherId: cleanId,
         date: todayStr,
         attendanceMode,
         resetTimestamps: resetMap,
@@ -767,8 +811,11 @@ export const TeacherDashboard: React.FC = () => {
         updatedAt: Date.now(),
       });
       localStorage.setItem(sessionKey, sessionPayload);
-      localStorage.setItem(fallbackSessionKey, sessionPayload);
-      localStorage.setItem('eduverse_attendance_session_reset_v1', JSON.stringify(resetMap));
+
+      // Remove legacy un-scoped keys so data never leaks across teacher accounts
+      localStorage.removeItem('eduverse_active_attendance_latest');
+      localStorage.removeItem('eduverse_active_session_latest');
+      localStorage.removeItem('eduverse_attendance_session_reset_v1');
     } catch {
       // ignore storage quota errors
     }
@@ -821,6 +868,7 @@ export const TeacherDashboard: React.FC = () => {
           ...existing,
           ...rec,
           id: isValidUUID(rec.id) ? rec.id : existing.id,
+          teacherId: rec.teacherId || existing.teacherId,
           classId: rec.classId || existing.classId,
           studentId: isValidUUID(rec.studentId) ? rec.studentId : existing.studentId || rec.studentId,
           studentName: preferNewName
@@ -851,9 +899,9 @@ export const TeacherDashboard: React.FC = () => {
     loadSavedResetTimestamps(user?.id)
   );
 
-  // Main Data States (Fetched directly from Supabase DB + LocalStorage Backup for Attendance)
+  // Main Data States (Isolated per logged-in teacher via user.id + LocalStorage Backup)
   const [courses, setCourses] = useState<CourseModule[]>([]);
-  const [classes, setClasses] = useState<ClassItem[]>([]);
+  const [classes, setClasses] = useState<ClassItem[]>(() => loadSavedClassesFromStorage(user?.id));
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [assignments, setAssignments] = useState<AssignmentItem[]>([]);
   const [submissions, setSubmissions] = useState<SubmissionItem[]>([]);
@@ -939,19 +987,24 @@ export const TeacherDashboard: React.FC = () => {
     maxScore: 100,
   });
 
-  // Restore local attendance immediately when user.id becomes available & fetch real data from Supabase DB
+  // Restore isolated teacher classes & attendance when user.id changes & fetch from Supabase DB
   useEffect(() => {
-    const restoredReset = loadSavedResetTimestamps(user?.id);
+    const currentTeacherId = resolveCurrentTeacherId(user?.id);
+    setSelectedClass((prev) => (prev && prev.teacherId && prev.teacherId !== currentTeacherId ? null : prev));
+
+    const restoredClasses = loadSavedClassesFromStorage(currentTeacherId);
+    setClasses(restoredClasses);
+
+    const restoredReset = loadSavedResetTimestamps(currentTeacherId);
     setSessionResetTimestamps(restoredReset);
 
-    const restoredLocal = loadSavedAttendanceFromStorage(user?.id, restoredReset);
-    if (restoredLocal.length > 0) {
-      setAttendanceRecords((prev) => {
-        const merged = mergeAttendanceRecordsUnique(restoredLocal, prev, restoredReset);
-        saveAttendanceToStorage(merged, user?.id, restoredReset);
-        return merged;
-      });
-    }
+    const restoredLocal = loadSavedAttendanceFromStorage(currentTeacherId, restoredReset);
+    setAttendanceRecords((prev) => {
+      const prevForSameTeacher = prev.filter((r) => !r.teacherId || r.teacherId === currentTeacherId);
+      const merged = mergeAttendanceRecordsUnique(restoredLocal, prevForSameTeacher, restoredReset);
+      saveAttendanceToStorage(merged, currentTeacherId, restoredReset);
+      return merged;
+    });
 
     fetchSupabaseData();
 
@@ -983,7 +1036,8 @@ export const TeacherDashboard: React.FC = () => {
       // 0. Fetch current auth user & all profiles map
       const { data: authData } = await supabase.auth.getUser();
       const authUser = authData?.user || null;
-      const activeTeacherId = authUser?.id || user?.id || '';
+      const activeTeacherId = authUser?.id || user?.id || resolveCurrentTeacherId();
+      if (!activeTeacherId) return;
 
       const { data: allProfiles } = await supabase.from('profiles').select('*');
       const profilesMap: Record<string, any> = {};
@@ -994,8 +1048,9 @@ export const TeacherDashboard: React.FC = () => {
       }
       allProfilesCacheRef.current = profilesMap;
 
-      const loggedInTeacherProfile = activeTeacherId ? profilesMap[activeTeacherId] : null;
+      const loggedInTeacherProfile = profilesMap[activeTeacherId] || null;
       const loggedInTeacherRealName = resolveTeacherRealName(loggedInTeacherProfile, authUser, null);
+      const currentTeacherName = loggedInTeacherRealName || currentTeacherDisplayName;
 
       // Sync teacher's real name to public.profiles if missing or set to 'Guru EduVerse'
       if (activeTeacherId && loggedInTeacherRealName) {
@@ -1018,92 +1073,31 @@ export const TeacherDashboard: React.FC = () => {
         }
       }
 
-      // 1. Materials
-      const { data: matData } = await supabase.from('materials').select('*').order('created_at', { ascending: false });
-      if (matData) {
-        setMaterials(
-          matData.map((m: any) => ({
-            id: m.id,
-            classId: m.class_id,
-            title: m.title,
-            fileType: m.file_type || 'pdf',
-            fileUrl: m.file_url,
-            fileName: m.title,
-            description: m.description || '',
-            className: 'Kelas',
-            createdAt: new Date(m.created_at).toLocaleDateString('id-ID'),
-          }))
-        );
-      }
+      // 1. Classes & Enrollments from Supabase DB (Strictly filtered by teacher_id === activeTeacherId)
+      const classesByIdMap: Record<string, ClassItem> = {};
+      const studentEnrolledClassMap: Record<string, ClassItem> = {};
 
-      // 2. Assignments
-      const { data: assData } = await supabase.from('assignments').select('*').order('created_at', { ascending: false });
-      if (assData) {
-        setAssignments(
-          assData.map((a: any) => ({
-            id: a.id,
-            classId: a.class_id,
-            title: a.title,
-            description: a.description || '',
-            dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
-            className: 'Kelas',
-            fileUrl: a.file_url,
-            fileName: a.file_name,
-            maxScore: a.max_score || 100,
-            createdAt: new Date(a.created_at).toLocaleDateString('id-ID'),
-          }))
-        );
-      }
+      const { data: clsData } = await supabase
+        .from('classes')
+        .select('*')
+        .eq('teacher_id', activeTeacherId)
+        .order('created_at', { ascending: false });
 
-      const assMap: Record<string, any> = {};
-      if (assData) {
-        assData.forEach((a: any) => { assMap[a.id] = a; });
-      }
+      // Client-side security filter: only keep classes belonging to the logged-in teacher
+      const ownedRawClasses = (clsData || []).filter(
+        (c: any) =>
+          c.teacher_id === activeTeacherId ||
+          (!c.teacher_id &&
+            currentTeacherName &&
+            String(c.teacher_name || '').trim().toLowerCase() === currentTeacherName.trim().toLowerCase())
+      );
 
-      // 3. Submissions with Real Student Profiles
-      const { data: subData } = await supabase.from('submissions').select('*').order('submitted_at', { ascending: false });
-      if (subData) {
-        setSubmissions(
-          subData.map((s: any) => {
-            const prof = profilesMap[s.student_id];
-            const ass = assMap[s.assignment_id];
-            return {
-              id: s.id,
-              assignmentId: s.assignment_id,
-              assignmentTitle: ass?.title || 'Tugas Kelas',
-              studentId: s.student_id,
-              studentName: resolveStudentDisplayName(null, prof, null, { sid: s.student_id }),
-              avatarUrl: prof?.avatar_url,
-              fileUrl: s.file_url,
-              notes: s.file_name ? `Berkas: ${s.file_name}` : '',
-              grade: s.score !== null && s.score !== undefined ? s.score : s.grade,
-              maxScore: ass?.max_score || 100,
-              feedback: s.feedback || '',
-              submittedAt: new Date(s.submitted_at).toLocaleString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
-            };
-          })
-        );
-      }
+      const ownedClassIds = ownedRawClasses.map((c: any) => c.id).filter(Boolean);
 
-      // 4. Courses
-      const { data: courseData } = await supabase.from('courses').select('*');
-      if (courseData && courseData.length > 0) {
-        setCourses(
-          courseData.map((c: any) => ({
-            id: c.id,
-            code: c.code || 'PEL-01',
-            name: c.name,
-            students: 0,
-            term: 'Aktif',
-          }))
-        );
-      }
-
-      // 4.5 Classes & Enrollments from Supabase DB (with real teacher profile resolution & student-to-class mapping)
-      const classesByIdMap: Record<string, any> = {};
-      const studentEnrolledClassMap: Record<string, any> = {};
-      const { data: clsData } = await supabase.from('classes').select('*').order('created_at', { ascending: false });
-      const { data: enrollData } = await supabase.from('enrollments').select('*');
+      const { data: enrollData } =
+        ownedClassIds.length > 0
+          ? await supabase.from('enrollments').select('*').in('class_id', ownedClassIds)
+          : { data: [] as any[] };
 
       const countMap: Record<string, number> = {};
       if (enrollData) {
@@ -1114,78 +1108,87 @@ export const TeacherDashboard: React.FC = () => {
         });
       }
 
-      if (clsData && clsData.length > 0) {
-        const mappedClasses = clsData.map((c: any) => {
-          const rawName = c.name || 'Kelas';
-          const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
-          const rawDbCode = (c.code || c.class_code || '').toString().trim().toUpperCase();
-          const extractedCode = (
-            rawDbCode ||
-            (matchCode ? matchCode[1] : '') ||
-            `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
-          )
-            .trim()
-            .toUpperCase();
-          const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
+      const mappedClasses: ClassItem[] = ownedRawClasses.map((c: any) => {
+        const rawName = c.name || 'Kelas';
+        const matchCode = rawName.match(/\[([A-Z0-9-]+)\]/i);
+        const rawDbCode = (c.code || c.class_code || '').toString().trim().toUpperCase();
+        const extractedCode = (
+          rawDbCode ||
+          (matchCode ? matchCode[1] : '') ||
+          `EV${String(c.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}`
+        )
+          .trim()
+          .toUpperCase();
+        const cleanName = rawName.replace(/\s*\[[A-Z0-9-]+\]/i, '').trim();
 
-          const classOwnerId = c.teacher_id || activeTeacherId;
-          const ownerProfile = classOwnerId ? profilesMap[classOwnerId] : loggedInTeacherProfile;
-          const isOwnedByCurrentTeacher = !c.teacher_id || c.teacher_id === activeTeacherId;
+        const classOwnerId = c.teacher_id || activeTeacherId;
+        const ownerProfile = profilesMap[classOwnerId] || loggedInTeacherProfile;
 
-          const resolvedClassTeacherName = resolveTeacherRealName(
-            ownerProfile,
-            isOwnedByCurrentTeacher ? authUser : null,
-            c.teacher_name
-          );
+        const resolvedClassTeacherName = resolveTeacherRealName(
+          ownerProfile,
+          authUser,
+          c.teacher_name
+        );
 
-          // Backfill code and sync real teacher_name / teacher_id on older classes that still say 'Guru EduVerse'
-          const needsCodeUpdate = !c.code || String(c.code).trim().toUpperCase() !== extractedCode;
-          const needsTeacherSync =
-            (!c.teacher_id && !!activeTeacherId) ||
-            (c.teacher_name !== undefined && isPlaceholderTeacherName(c.teacher_name));
+        // Backfill code and sync real teacher_name / teacher_id on classes owned by this teacher
+        const needsCodeUpdate = !c.code || String(c.code).trim().toUpperCase() !== extractedCode;
+        const needsTeacherSync =
+          !c.teacher_id || (c.teacher_name !== undefined && isPlaceholderTeacherName(c.teacher_name));
 
-          if (needsCodeUpdate || needsTeacherSync) {
-            const updatePayload: Record<string, any> = { code: extractedCode };
-            if (!c.teacher_id && activeTeacherId) {
-              updatePayload.teacher_id = activeTeacherId;
-            }
-            if (c.teacher_name !== undefined && resolvedClassTeacherName) {
-              updatePayload.teacher_name = resolvedClassTeacherName;
-            }
-            (supabase as any)
-              .from('classes')
-              .update(updatePayload)
-              .eq('id', c.id)
-              .then(({ error: syncErr }: any) => {
-                if (syncErr && updatePayload.teacher_name) {
-                  delete updatePayload.teacher_name;
-                  (supabase as any).from('classes').update(updatePayload).eq('id', c.id).then(() => {});
-                }
-              });
+        if (needsCodeUpdate || needsTeacherSync) {
+          const updatePayload: Record<string, any> = { code: extractedCode, teacher_id: activeTeacherId };
+          if (c.teacher_name !== undefined && resolvedClassTeacherName) {
+            updatePayload.teacher_name = resolvedClassTeacherName;
           }
+          (supabase as any)
+            .from('classes')
+            .update(updatePayload)
+            .eq('id', c.id)
+            .eq('teacher_id', activeTeacherId)
+            .then(({ error: syncErr }: any) => {
+              if (syncErr && updatePayload.teacher_name) {
+                delete updatePayload.teacher_name;
+                (supabase as any)
+                  .from('classes')
+                  .update(updatePayload)
+                  .eq('id', c.id)
+                  .eq('teacher_id', activeTeacherId)
+                  .then(() => {});
+              }
+            });
+        }
 
-          const clsItem: ClassItem = {
-            id: c.id,
-            name: cleanName || rawName,
-            code: extractedCode,
-            courseName: c.course_name || 'Mata Pelajaran Umum',
-            teacherId: classOwnerId,
-            teacherName: resolvedClassTeacherName,
-            teacherAvatar: ownerProfile?.avatar_url || user?.avatarUrl,
-            description: c.description || '',
-            jurusan: c.jurusan || 'Semua Jurusan',
-            semester: c.semester || 'Ganjil',
-            academicYear: c.academic_year || '2026/2027',
-            isActive: c.is_active !== false,
-            studentCount: countMap[c.id] || 0,
-          };
+        const clsItem: ClassItem = {
+          id: c.id,
+          name: cleanName || rawName,
+          code: extractedCode,
+          courseName: c.course_name || 'Mata Pelajaran Umum',
+          teacherId: classOwnerId,
+          teacherName: resolvedClassTeacherName,
+          teacherAvatar: ownerProfile?.avatar_url || user?.avatarUrl,
+          description: c.description || '',
+          jurusan: c.jurusan || 'Semua Jurusan',
+          semester: c.semester || 'Ganjil',
+          academicYear: c.academic_year || '2026/2027',
+          isActive: c.is_active !== false,
+          studentCount: countMap[c.id] || 0,
+        };
 
-          classesByIdMap[c.id] = clsItem;
-          return clsItem;
-        });
+        classesByIdMap[c.id] = clsItem;
+        return clsItem;
+      });
 
-        setClasses(mappedClasses);
-      }
+      // Final client-side guard before updating classes state & per-teacher localStorage cache
+      const isolatedClasses = mappedClasses.filter(
+        (c) =>
+          c.teacherId === activeTeacherId ||
+          (!c.teacherId && c.teacherName === currentTeacherName)
+      );
+
+      setClasses(isolatedClasses);
+      saveClassesToStorage(isolatedClasses, activeTeacherId);
+
+      const teacherClassIdSet = new Set(isolatedClasses.map((c) => c.id));
 
       if (enrollData) {
         enrollData.forEach((e: any) => {
@@ -1198,10 +1201,137 @@ export const TeacherDashboard: React.FC = () => {
       }
       studentEnrolledClassCacheRef.current = studentEnrolledClassMap;
 
-      // 5. Attendance Records Double Persistence: Restore LocalStorage + Merge with Supabase DB (Filtered for Today's Date)
+      // 2. Courses (Isolated to activeTeacherId)
+      const { data: courseData } = await supabase
+        .from('courses')
+        .select('*')
+        .eq('teacher_id', activeTeacherId);
+      if (courseData) {
+        setCourses(
+          courseData
+            .filter((c: any) => !c.teacher_id || c.teacher_id === activeTeacherId)
+            .map((c: any) => ({
+              id: c.id,
+              code: c.code || 'PEL-01',
+              name: c.name || c.title || 'Mata Pelajaran',
+              students: 0,
+              term: 'Aktif',
+            }))
+        );
+      } else {
+        setCourses([]);
+      }
+
+      // 3. Materials (Isolated to classes owned by activeTeacherId or teacher_id === activeTeacherId)
+      const { data: matData } = await supabase
+        .from('materials')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (matData) {
+        const isolatedMaterials = matData.filter(
+          (m: any) =>
+            (m.class_id && teacherClassIdSet.has(m.class_id)) ||
+            (m.teacher_id && m.teacher_id === activeTeacherId)
+        );
+        setMaterials(
+          isolatedMaterials.map((m: any) => ({
+            id: m.id,
+            classId: m.class_id,
+            title: m.title,
+            fileType: m.file_type || 'pdf',
+            fileUrl: m.file_url,
+            fileName: m.title,
+            description: m.description || '',
+            className: (m.class_id && classesByIdMap[m.class_id]?.name) || 'Kelas',
+            createdAt: new Date(m.created_at).toLocaleDateString('id-ID'),
+          }))
+        );
+      } else {
+        setMaterials([]);
+      }
+
+      // 4. Assignments (Isolated to classes owned by activeTeacherId or teacher_id === activeTeacherId)
+      const { data: assData } = await supabase
+        .from('assignments')
+        .select('*')
+        .order('created_at', { ascending: false });
+      const assMap: Record<string, any> = {};
+      if (assData) {
+        const isolatedAssignments = assData.filter(
+          (a: any) =>
+            (a.class_id && teacherClassIdSet.has(a.class_id)) ||
+            (a.teacher_id && a.teacher_id === activeTeacherId)
+        );
+        isolatedAssignments.forEach((a: any) => {
+          assMap[a.id] = a;
+        });
+        setAssignments(
+          isolatedAssignments.map((a: any) => ({
+            id: a.id,
+            classId: a.class_id,
+            title: a.title,
+            description: a.description || '',
+            dueDate: a.due_date ? a.due_date.slice(0, 10) : 'Tanpa Tenggat',
+            className: (a.class_id && classesByIdMap[a.class_id]?.name) || 'Kelas',
+            fileUrl: a.file_url,
+            fileName: a.file_name,
+            maxScore: a.max_score || 100,
+            createdAt: new Date(a.created_at).toLocaleDateString('id-ID'),
+          }))
+        );
+      } else {
+        setAssignments([]);
+      }
+
+      // 5. Submissions (Isolated strictly to this teacher's assignments)
+      const teacherAssignmentIds = Object.keys(assMap);
+      if (teacherAssignmentIds.length > 0) {
+        const { data: subData } = await supabase
+          .from('submissions')
+          .select('*')
+          .in('assignment_id', teacherAssignmentIds)
+          .order('submitted_at', { ascending: false });
+        if (subData) {
+          setSubmissions(
+            subData
+              .filter((s: any) => Boolean(assMap[s.assignment_id]))
+              .map((s: any) => {
+                const prof = profilesMap[s.student_id];
+                const ass = assMap[s.assignment_id];
+                return {
+                  id: s.id,
+                  assignmentId: s.assignment_id,
+                  assignmentTitle: ass?.title || 'Tugas Kelas',
+                  studentId: s.student_id,
+                  studentName: resolveStudentDisplayName(null, prof, null, { sid: s.student_id }),
+                  avatarUrl: prof?.avatar_url,
+                  fileUrl: s.file_url,
+                  notes: s.file_name ? `Berkas: ${s.file_name}` : '',
+                  grade: s.score !== null && s.score !== undefined ? s.score : s.grade,
+                  maxScore: ass?.max_score || 100,
+                  feedback: s.feedback || '',
+                  submittedAt: new Date(s.submitted_at).toLocaleString('id-ID', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  }),
+                };
+              })
+          );
+        } else {
+          setSubmissions([]);
+        }
+      } else {
+        setSubmissions([]);
+      }
+
+      // 6. Attendance Records Double Persistence (Isolated to activeTeacherId's classes & local session)
       const todayStr = getLocalDateYYYYMMDD(new Date());
       const savedResetMap = loadSavedResetTimestamps(activeTeacherId);
       const localStoredRecords = loadSavedAttendanceFromStorage(activeTeacherId, savedResetMap);
+      const localRecordIds = new Set(localStoredRecords.map((r) => r.id));
 
       const { data: attData } = await supabase
         .from('attendance_records')
@@ -1211,7 +1341,15 @@ export const TeacherDashboard: React.FC = () => {
       let mappedTodayRecords: AttendanceRecord[] = [];
 
       if (attData && attData.length > 0) {
-        const missingIds = attData
+        // Keep only attendance rows that belong to one of this teacher's classes or were scanned in this teacher's session
+        const isolatedAttData = attData.filter(
+          (a: any) =>
+            (a.class_id && teacherClassIdSet.has(a.class_id)) ||
+            (a.teacher_id && a.teacher_id === activeTeacherId) ||
+            (a.id && localRecordIds.has(a.id))
+        );
+
+        const missingIds = isolatedAttData
           .map((a: any) => a.student_id)
           .filter((id: string) => id && id.length >= 32 && !profilesMap[id]);
 
@@ -1227,7 +1365,7 @@ export const TeacherDashboard: React.FC = () => {
 
         const allProfilesList = Object.values(profilesMap);
 
-        mappedTodayRecords = attData
+        mappedTodayRecords = isolatedAttData
           .map((a: any) => {
             let qrParsed: Record<string, any> | null = null;
             if (a.qr_code && typeof a.qr_code === 'string' && a.qr_code.trim().startsWith('{')) {
@@ -1310,6 +1448,7 @@ export const TeacherDashboard: React.FC = () => {
 
             return {
               id: a.id,
+              teacherId: activeTeacherId,
               classId: a.class_id || clsObj?.id,
               studentId: effectiveStudentId,
               studentName: studentName,
@@ -1331,9 +1470,10 @@ export const TeacherDashboard: React.FC = () => {
           });
       }
 
-      // Merge localStorage backup + current UI state + Supabase records without duplicates
+      // Merge localStorage backup + current UI state (isolated to activeTeacherId) + Supabase records without duplicates
       setAttendanceRecords((prev) => {
-        const combinedLocal = mergeAttendanceRecordsUnique(localStoredRecords, prev, savedResetMap);
+        const prevForTeacher = prev.filter((r) => !r.teacherId || r.teacherId === activeTeacherId);
+        const combinedLocal = mergeAttendanceRecordsUnique(localStoredRecords, prevForTeacher, savedResetMap);
         const finalMerged = mergeAttendanceRecordsUnique(combinedLocal, mappedTodayRecords, savedResetMap);
         saveAttendanceToStorage(finalMerged, activeTeacherId, savedResetMap);
         return finalMerged;
@@ -1824,8 +1964,10 @@ export const TeacherDashboard: React.FC = () => {
         (cleanCode.startsWith('{') ? `EDU-SISWA-${String(effectiveStudentId).slice(0, 8)}` : cleanCode);
 
       // 5. Update UI State Immediately with complete Student Name & Major/Class
+      const activeScanTeacherId = resolveCurrentTeacherId(user?.id);
       const newRecord: AttendanceRecord = {
         id: `att-${now.getTime()}`,
+        teacherId: activeScanTeacherId || undefined,
         classId: effectiveClassId || undefined,
         studentId: effectiveStudentId,
         studentName: resolvedStudentName,
@@ -1844,6 +1986,7 @@ export const TeacherDashboard: React.FC = () => {
           ...prev.filter(
             (r) =>
               r.scannedDate === todayDateStr &&
+              (!r.teacherId || r.teacherId === activeScanTeacherId) &&
               !(
                 (r.studentId === newRecord.studentId ||
                   r.qrCode === newRecord.qrCode ||
@@ -1852,7 +1995,7 @@ export const TeacherDashboard: React.FC = () => {
               )
           ),
         ];
-        saveAttendanceToStorage(nextRecords, user?.id);
+        saveAttendanceToStorage(nextRecords, activeScanTeacherId);
         return nextRecords;
       });
 
@@ -1952,9 +2095,9 @@ export const TeacherDashboard: React.FC = () => {
           if (insertedRow?.id) {
             setAttendanceRecords((prev) => {
               const updated = prev.map((r) =>
-                r.id === newRecord.id ? { ...r, id: insertedRow.id } : r
+                r.id === newRecord.id ? { ...r, id: insertedRow.id, teacherId: activeScanTeacherId } : r
               );
-              saveAttendanceToStorage(updated, user?.id);
+              saveAttendanceToStorage(updated, activeScanTeacherId);
               return updated;
             });
           }
@@ -2021,21 +2164,24 @@ export const TeacherDashboard: React.FC = () => {
       const rawCodeInput = (newClass.code || '').trim().toUpperCase().replace(/\s+/g, '');
       const generatedCode = (rawCodeInput || generateUniqueClassCode()).trim().toUpperCase();
 
-      // Resolve logged-in teacher's real name in priority order:
+      // Resolve logged-in teacher's active ID and real name in priority order:
       // profile?.full_name || profile?.name || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0]
       const { data: authData } = await supabase.auth.getUser();
       const authUser = authData?.user || null;
-      const currentTeacherId = authUser?.id || user?.id;
+      const currentTeacherId = (authUser?.id || user?.id || resolveCurrentTeacherId()).trim();
+
+      if (!currentTeacherId) {
+        alert('Sesi login guru tidak ditemukan. Silakan masuk (login) kembali.');
+        return;
+      }
 
       let teacherProfileRow: any = null;
-      if (currentTeacherId) {
-        const { data: profRow } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', currentTeacherId)
-          .maybeSingle();
-        teacherProfileRow = profRow;
-      }
+      const { data: profRow } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', currentTeacherId)
+        .maybeSingle();
+      teacherProfileRow = profRow;
 
       const teacherRealName = resolveTeacherRealName(teacherProfileRow, authUser, null);
 
@@ -2083,10 +2229,15 @@ export const TeacherDashboard: React.FC = () => {
       }
 
       try {
-        const { data: crsData } = await (supabase as any).from('courses').select('id').limit(1);
-        if (crsData && crsData.length > 0 && crsData[0]?.id) {
-          courseId = crsData[0].id;
-        } else if (currentTeacherId) {
+        const { data: ownCrsData } = await (supabase as any)
+          .from('courses')
+          .select('id')
+          .eq('teacher_id', currentTeacherId)
+          .limit(1);
+
+        if (ownCrsData && ownCrsData.length > 0 && ownCrsData[0]?.id) {
+          courseId = ownCrsData[0].id;
+        } else {
           const { data: newCrs } = await (supabase as any)
             .from('courses')
             .insert({
@@ -2100,6 +2251,11 @@ export const TeacherDashboard: React.FC = () => {
             .maybeSingle();
           if (newCrs?.id) {
             courseId = newCrs.id;
+          } else {
+            const { data: anyCrsData } = await (supabase as any).from('courses').select('id').limit(1);
+            if (anyCrsData && anyCrsData.length > 0 && anyCrsData[0]?.id) {
+              courseId = anyCrsData[0].id;
+            }
           }
         }
       } catch (eCrs) {}
@@ -2282,7 +2438,11 @@ export const TeacherDashboard: React.FC = () => {
         studentCount: 0,
       };
 
-      setClasses((prev) => [obj, ...prev]);
+      setClasses((prev) => {
+        const next = [obj, ...prev.filter((c) => !c.teacherId || c.teacherId === currentTeacherId)];
+        saveClassesToStorage(next, currentTeacherId);
+        return next;
+      });
       setNewClass({
         name: '',
         code: '',
@@ -2739,8 +2899,12 @@ export const TeacherDashboard: React.FC = () => {
         return;
       }
 
-      // 3. Pembersihan State UI Lokal
-      setClasses((prev) => prev.filter((c) => c.id !== classId));
+      // 3. Pembersihan State UI Lokal & Cache Per-Guru
+      setClasses((prev) => {
+        const next = prev.filter((c) => c.id !== classId);
+        saveClassesToStorage(next, user?.id);
+        return next;
+      });
       setMaterials((prev) => prev.filter((m) => m.classId !== classId));
       setAssignments((prev) => prev.filter((a) => a.classId !== classId));
       setAnnouncements((prev) => prev.filter((a) => a.classId !== classId));
@@ -2770,9 +2934,13 @@ export const TeacherDashboard: React.FC = () => {
     try {
       await (supabase as any).from('enrollments').delete().eq('class_id', selectedClass.id).eq('student_id', studentId);
       setEnrolledStudents((prev) => prev.filter((s) => s.id !== studentId));
-      setClasses((prev) =>
-        prev.map((c) => (c.id === selectedClass.id ? { ...c, studentCount: Math.max(0, c.studentCount - 1) } : c))
-      );
+      setClasses((prev) => {
+        const next = prev.map((c) =>
+          c.id === selectedClass.id ? { ...c, studentCount: Math.max(0, c.studentCount - 1) } : c
+        );
+        saveClassesToStorage(next, user?.id);
+        return next;
+      });
       alert(`✅ Siswa ${studentName} telah dikeluarkan dari kelas.`);
     } catch (err: any) {
       alert(`Gagal mengeluarkan siswa: ${err.message}`);
